@@ -1,0 +1,89 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env
+.env.local
+.env.*.local
+
+# Node.js
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+frontend/.env.local
+
+# Model weights (large binary files - download separately)
+# See docs/ARCHITECTURE.md Section 7 for download instructions
+*.pt
+*.pth
+*.ckpt
+*.onnx
+
+# Dataset / media (large binary files)
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.jpg
+*.jpeg
+*.png
+*.webp
+*.gif
+*.bmp
+
+# Database (runtime state)
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs
+*.log
+logs/
+
+# Debug output
+debug_backend_out.jpg
+debug_*.jpg
+debug_*.png
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+tmp/
+
+# Zip / archive (if not intentional)
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.rar
+
+# Claude / Agent artifacts
+.claude/
+.claudesignore/
