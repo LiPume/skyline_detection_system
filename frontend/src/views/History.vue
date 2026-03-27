@@ -117,6 +117,12 @@ function shortModel(name: string) {
   return name.replace('YOLO-World-V2', 'WV2').replace('YOLOv8-Base', 'v8n')
 }
 
+function shortModelConfig(modelConfig: { display_name?: string; model_id?: string } | null) {
+  if (!modelConfig) return '未知'
+  const name = modelConfig.display_name || modelConfig.model_id || '未知'
+  return shortModel(name)
+}
+
 function statusConfig(status: string) {
   if (status === 'completed') return 'bg-emerald-500/10 border-emerald-500/25 text-emerald-400'
   if (status === 'failed')    return 'bg-red-500/10    border-red-500/25    text-red-400'
@@ -216,7 +222,7 @@ function statusConfig(status: string) {
             <!-- Model -->
             <div>
               <span class="text-xs px-2 py-0.5 rounded-md bg-blue-500/10 border border-blue-500/20 text-blue-400 font-mono">
-                {{ shortModel(rec.model_name) }}
+                {{ shortModelConfig(rec.detection_model) }}
               </span>
             </div>
 
@@ -400,7 +406,7 @@ function statusConfig(status: string) {
                   检测目标: <span class="text-slate-300">{{ previewVideo.total_detections }} 个</span>
                 </span>
                 <span class="text-xs text-slate-500">
-                  模型: <span class="text-blue-400">{{ previewVideo.model_name }}</span>
+                  模型: <span class="text-blue-400">{{ shortModelConfig(previewVideo.detection_model) }}</span>
                 </span>
               </div>
               <button

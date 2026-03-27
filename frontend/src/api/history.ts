@@ -3,6 +3,7 @@
  * REST client for detection record CRUD operations.
  */
 import { API_BASE_URL } from '@/config/index'
+import type { ModelConfig } from '@/types/skyline'
 
 // ── Shared types ──────────────────────────────────────────────────────────────
 
@@ -12,7 +13,7 @@ export interface HistoryRecord {
   duration: number         // seconds
   video_name: string
   video_path: string | null
-  model_name: string
+  detection_model: ModelConfig
   class_counts: Record<string, number>
   total_detections: number
   status: 'completed' | 'failed' | 'cancelled'
@@ -23,7 +24,7 @@ export interface HistoryRecord {
 export interface SaveDetectionPayload {
   video_name: string
   duration: number
-  model_name: string
+  detection_model: ModelConfig
   class_counts: Record<string, number>
   total_detections: number
   video_path?: string

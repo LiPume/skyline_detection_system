@@ -1,9 +1,9 @@
 """
 Skyline — Pydantic v2 Data Models
 Strict schema enforcement for WebSocket message protocol.
-Phase 2: Added selected_model and target_classes to VideoFrame.
+Phase 3.1: Added model_id, prompt_classes, selected_classes for model capability driven inference.
 """
-from typing import Literal, List, Tuple
+from typing import Literal
 from pydantic import BaseModel, Field
 
 
@@ -12,18 +12,18 @@ from pydantic import BaseModel, Field
 class VideoFrame(BaseModel):
     """A single video frame sent from the frontend at ~20 FPS."""
     message_type: Literal["video_frame"]
-    timestamp: float = Field(..., description="Client send timestamp (epoch seconds)")
-    frame_id: int    = Field(..., ge=0, description="Monotonically increasing frame counter")
-    image_base64: str = Field(..., min_length=10, description="JPEG Base64 with data URI prefix")
-    # ── Phase 2: AI engine control fields ─────────────────────────────────
-    selected_model: str = Field(
-        default="YOLO-World-V2",
-        description="Model name to use for inference (must match ModelManager registry)",
-    )
-    target_classes: List[str] = Field(
-        default_factory=list,
-        description="Open-vocabulary target class names parsed from the user's prompt",
-    )
+    timestamp: float
+    frame_id: int
+    image_base64: str
+    
+    # ── Phase 3.1: Model capability driven fields ────────────────────────────
+    model_id: str = "YOLO-World-V2"
+    prompt_classes: list[str] = []
+    selected_classes: list[str] = []
+    
+    # Legacy field alias for backward compatibility
+    selected_model: str | None = None
+    target_classes: list[str] = []
 
 
 # ── Downstream: Server → Client ───────────────────────────────────────────────
@@ -31,17 +31,17 @@ class VideoFrame(BaseModel):
 class Detection(BaseModel):
     """A single object detection result."""
     class_name: str
-    confidence: float = Field(..., ge=0.0, le=1.0)
-    bbox: Tuple[int, int, int, int]  # [x_min, y_min, width, height] in natural resolution
+    confidence: float
+    bbox: tuple[int, int, int, int]
 
 
 class InferenceResult(BaseModel):
     """Full inference response sent back per frame."""
     message_type: Literal["inference_result"] = "inference_result"
     frame_id: int
-    timestamp: float           # Original client timestamp — echoed back for latency calc
-    inference_time_ms: float   # Pure model inference duration
-    detections: List[Detection]
+    timestamp: float
+    inference_time_ms: float
+    detections: list[Detection]
 
 
 class ErrorMessage(BaseModel):

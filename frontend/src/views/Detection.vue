@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
-import type { Detection, ServerMessage, InferenceResult, SupportedModel } from '@/types/skyline'
-import { SUPPORTED_MODELS } from '@/types/skyline'
+import type { Detection, ServerMessage, InferenceResult } from '@/types/skyline'
 import { useWebSocket }      from '@/composables/useWebSocket'
 import { useVideoStream }    from '@/composables/useVideoStream'
 import { useCanvasRenderer } from '@/composables/useCanvasRenderer'
+import { useModelConfig } from '@/composables/useModelConfig'
 import { wsStatus as globalWsStatus, isGpuActive } from '@/store/systemStatus'
 import { LATENCY_THROTTLE_THRESHOLD_MS, LATENCY_BAR_MAX_MS } from '@/config'
 import { saveDetection }     from '@/api/history'
@@ -81,7 +81,7 @@ async function autoSave() {
     await saveDetection({
       video_name: videoName.value,
       duration: analysisDuration.value,
-      model_name: selectedModel.value,
+      detection_model: buildModelConfig(),
       class_counts: { ...classCounts.value },
       total_detections: totalDetections.value,
     })
@@ -93,15 +93,30 @@ async function autoSave() {
   }
 }
 
+// ── Model Config (Phase 3.1) ─────────────────────────────────────────────────
+const {
+  modelList,
+  selectedModelId,
+  currentCapabilities,
+  isLoading: modelLoading,
+  fetchError: modelError,
+  promptInput,
+  targetClasses,
+  selectedClasses,
+  isOpenVocabModel,
+  isClosedSetModel,
+  selectModel,
+  toggleClass,
+  selectAllClasses,
+  clearAllClasses,
+  appendChip,
+  buildModelConfig,
+  initialize: initModelConfig,
+} = useModelConfig()
+
 // ── AI console state ───────────────────────────────────────────────────────────
-const selectedModel = ref<SupportedModel>('YOLO-World-V2')
-const promptInput   = ref('car, person, drone')
 
-const targetClasses = computed<string[]>(() =>
-  promptInput.value.split(',').map(s => s.trim()).filter(Boolean),
-)
-
-const QUICK_CHIPS = [
+const QUICK_CHIPS_LOCAL = [
   { label: '汽车',   en: 'car' },
   { label: '行人',   en: 'person' },
   { label: '无人机', en: 'drone' },
@@ -111,15 +126,8 @@ const QUICK_CHIPS = [
   { label: '背包',   en: 'backpack' },
 ]
 
-function appendChip(en: string) {
-  const existing = promptInput.value.split(',').map(s => s.trim()).filter(Boolean)
-  if (!existing.includes(en)) {
-    promptInput.value = existing.length ? existing.join(', ') + ', ' + en : en
-  }
-}
-
 // ── WebSocket ──────────────────────────────────────────────────────────────────
-const { status: wsStatus, sendFailCount, connect, disconnect, send } = useWebSocket({
+const { status: wsStatus, connect, disconnect, send } = useWebSocket({
   onMessage(msg: ServerMessage) {
     if (msg.message_type === 'inference_result') {
       const r = msg as InferenceResult
@@ -145,18 +153,27 @@ watch(wsStatus,    v => { globalWsStatus.value = v }, { immediate: true })
 watch(isAnalyzing, v => { isGpuActive.value    = v }, { immediate: true })
 
 // ── Video stream ───────────────────────────────────────────────────────────────
+const selectedClassesArray = computed<string[]>(() => Array.from(selectedClasses.value))
+
 const { sourceType, isPlaying, hasVideo, loadFile, selectWebcam, startPush, stopPush } =
   useVideoStream({
     videoEl,
     systemLatency,
-    onFrame({ frame_id, timestamp, image_base64 }) {
+    modelId: selectedModelId,
+    promptClasses: targetClasses,
+    selectedClasses: selectedClassesArray,
+    onFrame({ frame_id, timestamp, image_base64, model_id, prompt_classes, selected_classes }) {
       send(JSON.stringify({
         message_type:   'video_frame',
         frame_id,
         timestamp,
         image_base64,
-        selected_model: selectedModel.value,
-        target_classes: targetClasses.value,
+        model_id,
+        prompt_classes,
+        selected_classes,
+        // Legacy fields for backward compatibility
+        selected_model: model_id,
+        target_classes: prompt_classes,
       }))
     },
   })
@@ -178,10 +195,22 @@ function startAnalysis() {
     showToast('WebSocket 未连接，请等待重连后重试', 'warn')
     return
   }
-  if (targetClasses.value.length === 0) {
-    showToast('请先填写至少一个检测目标', 'warn')
-    return
+  
+  // Phase 3.1: Model-specific validation
+  if (isOpenVocabModel.value) {
+    // Open vocab model requires at least one target class
+    if (targetClasses.value.length === 0) {
+      showToast('请先填写至少一个检测目标', 'warn')
+      return
+    }
+  } else if (isClosedSetModel.value) {
+    // Closed-set model requires at least one selected class
+    if (selectedClasses.value.size === 0) {
+      showToast('请先选择至少一个要显示的类别', 'warn')
+      return
+    }
   }
+  
   const video = videoEl.value!
   if (analysisState.value === 'finished') {
     video.currentTime = 0
@@ -300,7 +329,10 @@ async function onSelectWebcam() {
 
 // ── Lifecycle ──────────────────────────────────────────────────────────────────
 
-onMounted(() => {
+onMounted(async () => {
+  // Phase 3.1: Initialize model configuration
+  await initModelConfig()
+  
   connect()
   startRendering()
 
@@ -590,70 +622,188 @@ const stateInfo = computed(() => ({
           </div>
         </div>
 
+        <!-- Model Info Banner (Phase 3.1) -->
+        <div v-if="currentCapabilities" class="mb-4 p-3 rounded-lg border" :class="isOpenVocabModel ? 'bg-blue-500/10 border-blue-500/30' : 'bg-amber-500/10 border-amber-500/30'">
+          <div class="flex items-start justify-between gap-2">
+            <div>
+              <div class="flex items-center gap-2">
+                <span class="text-sm font-medium text-white">{{ currentCapabilities.display_name }}</span>
+                <span class="px-1.5 py-0.5 rounded text-xs" :class="isOpenVocabModel ? 'bg-blue-500/20 text-blue-400' : 'bg-amber-500/20 text-amber-400'">
+                  {{ isOpenVocabModel ? '开放词汇' : '固定类别' }}
+                </span>
+              </div>
+              <p class="text-xs text-slate-400 mt-1">{{ currentCapabilities.description }}</p>
+            </div>
+            <div v-if="modelLoading" class="flex-shrink-0">
+              <svg class="w-4 h-4 text-blue-400 animate-spin" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+              </svg>
+            </div>
+          </div>
+        </div>
+
         <!-- Model selector -->
         <div>
           <label class="block text-xs font-medium text-slate-400 tracking-wider uppercase mb-2">推理模型</label>
           <div class="relative">
             <select
-              v-model="selectedModel"
+              :value="selectedModelId"
               :disabled="isLocked"
               class="w-full appearance-none bg-slate-800 border border-slate-700 rounded-lg
                      px-3 py-2.5 text-sm text-slate-200 cursor-pointer outline-none
                      focus:border-blue-500 focus:ring-1 focus:ring-blue-500/30
                      disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+              @change="(e) => selectModel((e.target as HTMLSelectElement).value)"
             >
-              <option v-for="m in SUPPORTED_MODELS" :key="m" :value="m" class="bg-slate-900">{{ m }}</option>
+              <option v-for="m in modelList" :key="m.model_id" :value="m.model_id" class="bg-slate-900">
+                {{ m.display_name }}
+              </option>
             </select>
             <svg class="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-slate-500"
                  width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polyline points="6,9 12,15 18,9"/>
             </svg>
           </div>
+          <div v-if="modelError" class="mt-1.5 text-xs text-red-400">{{ modelError }}</div>
         </div>
 
-        <!-- Quick chips -->
-        <div>
-          <label class="block text-xs font-medium text-slate-400 tracking-wider uppercase mb-2">快捷类别</label>
-          <div class="flex flex-wrap gap-1.5">
-            <button
-              v-for="chip in QUICK_CHIPS"
-              :key="chip.en"
-              class="px-2.5 py-1 rounded-full border text-xs transition-all duration-150"
-              :class="isLocked
-                ? 'border-slate-700 text-slate-600 cursor-not-allowed opacity-50'
-                : targetClasses.includes(chip.en)
-                  ? 'border-blue-500/50 bg-blue-500/10 text-blue-400'
-                  : 'border-slate-600 text-slate-300 hover:border-blue-500 hover:text-blue-400 hover:bg-blue-500/10 cursor-pointer'"
+        <!-- Phase 3.1: Dynamic Configuration Based on Model Type -->
+        
+        <!-- Open Vocabulary Model: Prompt Input -->
+        <div v-if="isOpenVocabModel">
+          <!-- Quick chips for open-vocab -->
+          <div class="mb-3">
+            <label class="block text-xs font-medium text-slate-400 tracking-wider uppercase mb-2">快捷类别</label>
+            <div class="flex flex-wrap gap-1.5">
+              <button
+                v-for="chip in QUICK_CHIPS_LOCAL"
+                :key="chip.en"
+                class="px-2.5 py-1 rounded-full border text-xs transition-all duration-150"
+                :class="isLocked
+                  ? 'border-slate-700 text-slate-600 cursor-not-allowed opacity-50'
+                  : targetClasses.includes(chip.en)
+                    ? 'border-blue-500/50 bg-blue-500/10 text-blue-400'
+                    : 'border-slate-600 text-slate-300 hover:border-blue-500 hover:text-blue-400 hover:bg-blue-500/10 cursor-pointer'"
+                :disabled="isLocked"
+                @click="appendChip(chip.en)"
+              >{{ chip.label }}</button>
+            </div>
+          </div>
+
+          <!-- Prompt input for open-vocab -->
+          <div>
+            <label class="block text-xs font-medium text-slate-400 tracking-wider uppercase mb-2">检测目标 Prompt</label>
+            <textarea
+              v-model="promptInput"
               :disabled="isLocked"
-              @click="appendChip(chip.en)"
-            >{{ chip.label }}</button>
+              placeholder="car, person, drone, backpack..."
+              rows="3"
+              spellcheck="false"
+              class="w-full bg-slate-800 border border-slate-700 rounded-lg
+                     px-3 py-2.5 text-sm text-slate-200 resize-none outline-none
+                     placeholder:text-slate-600 font-mono
+                     focus:border-blue-500 focus:ring-1 focus:ring-blue-500/30
+                     disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+            ></textarea>
+            <!-- Parsed class chips -->
+            <div v-if="targetClasses.length > 0" class="flex flex-wrap gap-1 mt-2">
+              <span
+                v-for="cls in targetClasses" :key="cls"
+                class="inline-flex items-center px-2 py-0.5 rounded-md
+                       bg-blue-500/10 border border-blue-500/30 text-blue-400 text-xs font-mono"
+              >{{ cls }}</span>
+            </div>
+            <div v-else class="mt-1.5 text-xs text-amber-500/70">⚠ 尚未定义检测目标</div>
           </div>
         </div>
 
-        <!-- Prompt input -->
-        <div>
-          <label class="block text-xs font-medium text-slate-400 tracking-wider uppercase mb-2">检测目标 Prompt</label>
-          <textarea
-            v-model="promptInput"
-            :disabled="isLocked"
-            placeholder="car, person, drone, backpack..."
-            rows="3"
-            spellcheck="false"
-            class="w-full bg-slate-800 border border-slate-700 rounded-lg
-                   px-3 py-2.5 text-sm text-slate-200 resize-none outline-none
-                   placeholder:text-slate-600 font-mono
-                   focus:border-blue-500 focus:ring-1 focus:ring-blue-500/30
-                   disabled:opacity-40 disabled:cursor-not-allowed transition-all"
-          ></textarea>
-          <!-- Parsed class chips -->
-          <div v-if="targetClasses.length > 0" class="flex flex-wrap gap-1 mt-2">
-            <span
-              v-for="cls in targetClasses" :key="cls"
-              class="inline-flex items-center px-2 py-0.5 rounded-md
-                     bg-blue-500/10 border border-blue-500/30 text-blue-400 text-xs font-mono"
-            >{{ cls }}</span>
+        <!-- Closed Set Model: Class Filter -->
+        <div v-else-if="isClosedSetModel">
+          <div class="mb-3 p-3 rounded-lg bg-amber-500/5 border border-amber-500/20">
+            <div class="flex items-center gap-2 text-amber-400 text-xs">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"/>
+                <line x1="12" y1="8" x2="12" y2="12"/>
+                <line x1="12" y1="16" x2="12.01" y2="16"/>
+              </svg>
+              <span>该模型为固定类别检测，仅支持预设类别</span>
+            </div>
           </div>
-          <div v-else class="mt-1.5 text-xs text-amber-500/70">⚠ 尚未定义检测目标</div>
+
+          <!-- Class selection controls -->
+          <div class="flex items-center justify-between mb-2">
+            <label class="text-xs font-medium text-slate-400 tracking-wider uppercase">
+              支持类别 ({{ currentCapabilities?.supported_classes?.length ?? 0 }})
+            </label>
+            <div class="flex gap-2">
+              <button
+                class="text-xs text-blue-400 hover:text-blue-300 transition-colors"
+                :disabled="isLocked"
+                @click="selectAllClasses"
+              >全选</button>
+              <button
+                class="text-xs text-slate-500 hover:text-slate-400 transition-colors"
+                :disabled="isLocked"
+                @click="clearAllClasses"
+              >清空</button>
+            </div>
+          </div>
+
+          <!-- Supported classes grid -->
+          <div class="max-h-48 overflow-y-auto border border-slate-700 rounded-lg p-2 bg-slate-800/50">
+            <div class="grid grid-cols-2 gap-1">
+              <button
+                v-for="cls in currentCapabilities?.supported_classes"
+                :key="cls"
+                class="text-left px-2 py-1.5 rounded text-xs transition-all duration-150 truncate"
+                :class="[
+                  isLocked
+                    ? 'cursor-not-allowed opacity-50'
+                    : 'cursor-pointer',
+                  selectedClasses.has(cls)
+                    ? 'bg-blue-500/20 border border-blue-500/40 text-blue-400'
+                    : 'bg-slate-700/50 border border-transparent text-slate-400 hover:bg-slate-700 hover:text-slate-300'
+                ]"
+                :disabled="isLocked"
+                @click="toggleClass(cls)"
+              >
+                <span class="flex items-center gap-1.5">
+                  <span
+                    class="w-3 h-3 rounded flex-shrink-0 flex items-center justify-center border text-[8px]"
+                    :class="selectedClasses.has(cls) ? 'bg-blue-500 border-blue-500 text-white' : 'border-slate-600'"
+                  >
+                    <span v-if="selectedClasses.has(cls)">✓</span>
+                  </span>
+                  {{ cls }}
+                </span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Selected classes summary -->
+          <div v-if="selectedClasses.size > 0" class="mt-2 flex flex-wrap gap-1">
+            <span
+              v-for="cls in Array.from(selectedClasses).slice(0, 5)"
+              :key="cls"
+              class="inline-flex items-center px-2 py-0.5 rounded-md
+                     bg-blue-500/10 border border-blue-500/30 text-blue-400 text-xs"
+            >{{ cls }}</span>
+            <span
+              v-if="selectedClasses.size > 5"
+              class="inline-flex items-center px-2 py-0.5 rounded-md
+                     bg-slate-700 text-slate-400 text-xs"
+            >+{{ selectedClasses.size - 5 }}</span>
+          </div>
+          <div v-else class="mt-2 text-xs text-amber-500/70">⚠ 请选择要显示的类别</div>
+        </div>
+
+        <!-- Loading / Error state -->
+        <div v-else-if="modelLoading" class="flex items-center justify-center py-8">
+          <svg class="w-6 h-6 text-blue-400 animate-spin" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+          </svg>
         </div>
 
         <!-- CTA buttons -->

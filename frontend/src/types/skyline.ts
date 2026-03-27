@@ -1,23 +1,68 @@
 // Skyline — Shared TypeScript type definitions
-// Single source of truth for WebSocket protocol types
+// Single source of truth for WebSocket protocol types and model capabilities
 
-// ── Upstream: Client → Server ──────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════════════════════════
+// MODEL CAPABILITIES (Phase 3.1)
+// ════════════════════════════════════════════════════════════════════════════════
+
+export type ModelType = 'open_vocab' | 'closed_set'
+
+export interface ModelCapabilities {
+  model_id: string
+  display_name: string
+  model_type: ModelType
+  supports_prompt: boolean
+  prompt_editable: boolean
+  supported_classes: string[]
+  class_filter_enabled: boolean
+  description: string
+}
+
+export interface ModelListItem {
+  model_id: string
+  display_name: string
+  model_type: ModelType
+  description: string
+}
+
+export interface ModelListResponse {
+  models: ModelListItem[]
+}
+
+export interface ModelConfig {
+  model_id: string
+  display_name: string
+  model_type: ModelType
+  prompt_classes: string[]
+  selected_classes: string[]
+}
+
+// ════════════════════════════════════════════════════════════════════════════════
+// WEBSOCKET MESSAGE TYPES (Phase 3.1)
+// ════════════════════════════════════════════════════════════════════════════════
+
+// ── Upstream: Client → Server ──────────────────────────────────────────────────
 
 export interface VideoFrame {
   message_type: 'video_frame'
   timestamp: number        // epoch seconds, used for E2E latency calculation
   frame_id: number         // monotonically increasing
   image_base64: string     // "data:image/jpeg;base64,..."
-  selected_model: string   // model name chosen by user
-  target_classes: string[] // parsed from prompt input, e.g. ["car", "person"]
+  // Phase 3.1: Model capability driven fields
+  model_id: string         // model identifier (canonical, e.g. "YOLO-World-V2")
+  prompt_classes: string[] // for open_vocab models: custom detection targets
+  selected_classes: string[] // for closed_set models: filter which classes to display
+  // Legacy fields for backward compatibility
+  selected_model?: string
+  target_classes?: string[]
 }
 
-// ── AI Engine ──────────────────────────────────────────────────────────────
+// ── AI Engine ─────────────────────────────────────────────────────────────────
 
 export const SUPPORTED_MODELS = ['YOLO-World-V2', 'YOLOv8-Base'] as const
 export type SupportedModel = typeof SUPPORTED_MODELS[number]
 
-// ── Downstream: Server → Client ────────────────────────────────────────────
+// ── Downstream: Server → Client ────────────────────────────────────────────────
 
 export interface Detection {
   class_name: string
@@ -41,7 +86,7 @@ export interface ErrorMessage {
 
 export type ServerMessage = InferenceResult | ErrorMessage
 
-// ── UI State ───────────────────────────────────────────────────────────────
+// ── UI State ──────────────────────────────────────────────────────────────────
 
 export type WsStatus = 'connecting' | 'connected' | 'disconnected'
 export type VideoSourceType = 'webcam' | 'local_file'

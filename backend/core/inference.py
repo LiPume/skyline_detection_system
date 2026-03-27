@@ -1,11 +1,12 @@
 """
-Skyline — Inference Scheduler (Phase 3: Live YOLO Pipeline)
+Skyline — Inference Scheduler (Phase 3.1: Model Capability Driven Inference)
 
-Changes from Phase 2:
-  - _blocking_inference now catches broad Exception (not just ValueError) to handle
-    CUDA OOM, OpenCV decode errors, and unexpected model failures gracefully
-  - CUDA OOM triggers a specific warning to aid GPU memory debugging
-  - All other logic (LIFO scheduler, run_in_threadpool, circuit breaker) unchanged
+Changes from Phase 3:
+  - Now uses model_id from VideoFrame to select the correct model
+  - Differentiates between open_vocab (YOLO-World) and closed_set (YOLOv8) models
+  - open_vocab models: use prompt_classes as detection targets
+  - closed_set models: use selected_classes for post-inference filtering
+  - Added model capability validation and error handling
 """
 import asyncio
 import logging
@@ -16,6 +17,7 @@ from starlette.concurrency import run_in_threadpool
 
 from core.models import InferenceResult, VideoFrame
 from models.model_manager import get_model
+from models.registry import get_model_capabilities, filter_supported_classes
 
 logger = logging.getLogger(__name__)
 
@@ -28,27 +30,81 @@ def _blocking_inference(frame: VideoFrame) -> InferenceResult:
     """
     CPU/GPU-bound inference — runs in a thread pool (keeps asyncio event loop free).
 
+    Model type handling:
+      - open_vocab (YOLO-World): uses prompt_classes as detection targets
+      - closed_set (YOLOv8): ignores prompt_classes, uses selected_classes for filtering
+
     Error handling:
-      - ValueError:       base64 decode failure or unknown model name → empty detections
-      - RuntimeError:     CUDA OOM or PyTorch errors → empty detections + specific log
+      - ValueError: base64 decode failure or unknown model name → empty detections
+      - RuntimeError: CUDA OOM or PyTorch errors → empty detections + specific log
       - Exception (catch-all): any other model failure → empty detections + error log
     """
     t0 = _time.perf_counter()
 
-    selected_model = frame.selected_model or DEFAULT_MODEL
-    target_classes = [c.strip() for c in frame.target_classes if c.strip()]
+    # Resolve model_id with fallback for legacy selected_model field
+    selected_model = frame.model_id or frame.selected_model or DEFAULT_MODEL
+    
+    # Get model capabilities to determine how to handle classes
+    caps = get_model_capabilities(selected_model)
+    if caps is None:
+        logger.warning("[frame %d] Unknown model '%s', falling back to %s", 
+                      frame.frame_id, selected_model, DEFAULT_MODEL)
+        selected_model = DEFAULT_MODEL
+        caps = get_model_capabilities(selected_model)
+
+    # Determine which classes to use based on model type
+    if caps.model_type == "open_vocab":
+        # Open vocabulary model: use prompt_classes (or legacy target_classes)
+        target_classes = frame.prompt_classes or frame.target_classes
+        if not target_classes:
+            target_classes = ["object"]  # Ultimate fallback for open vocab
+        # Clean and normalize
+        clean_classes: list[str] = []
+        for c in target_classes:
+            clean_classes.extend([x.strip().lower() for x in c.split(",") if x.strip()])
+        if not clean_classes:
+            clean_classes = ["object"]
+        selected_classes_filter: list[str] = []  # No filtering for open vocab
+    else:
+        # Closed set model: ignore prompt_classes, use selected_classes for filtering
+        clean_classes = []  # Not used for closed set
+        # Filter selected_classes to only those supported by the model
+        selected_classes_filter = filter_supported_classes(
+            selected_model, 
+            frame.selected_classes
+        )
+        logger.info(
+            "[frame %d] Model '%s' (closed_set): selected_classes=%s → filtered=%s",
+            frame.frame_id, selected_model, frame.selected_classes, selected_classes_filter
+        )
 
     logger.info(
-        "收到模型 %s 的请求，目标: %s (frame_id=%d)",
-        selected_model,
-        target_classes,
-        frame.frame_id,
+        "[frame %d] Inference request: model=%s (type=%s), prompt=%s, filter=%s",
+        frame.frame_id, selected_model, caps.model_type, clean_classes, selected_classes_filter
     )
 
     detections = []
     try:
         model = get_model(selected_model)
-        detections = model.infer(frame.image_base64, target_classes)
+        
+        # For open_vocab models, pass clean_classes to infer()
+        # For closed_set models, pass empty list (filtering is done post-inference)
+        model_target_classes = clean_classes if caps.model_type == "open_vocab" else []
+        
+        detections = model.infer(frame.image_base64, model_target_classes)
+        
+        # Post-inference filtering for closed_set models
+        if caps.model_type == "closed_set" and selected_classes_filter:
+            original_count = len(detections)
+            filter_set = {c.lower() for c in selected_classes_filter}
+            detections = [
+                d for d in detections 
+                if d.class_name.lower() in filter_set
+            ]
+            logger.info(
+                "[frame %d] Closed-set filter: %d → %d detections",
+                frame.frame_id, original_count, len(detections)
+            )
 
     except ValueError as exc:
         # Bad model name OR base64 decode failure

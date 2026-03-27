@@ -12,6 +12,8 @@
  *   - selectFile() removed; replaced by loadFile() which does NOT auto-play
  *   - hasVideo ref: true once video has data (drives canvas standby vs. frame display)
  *   - video.loop removed from file mode (we need the 'ended' event for state machine)
+ * 
+ * Phase 3.1: Updated to support model capability driven frame data
  */
 import { ref, onUnmounted } from 'vue'
 import type { Ref } from 'vue'
@@ -26,7 +28,18 @@ import {
 interface UseVideoStreamOptions {
   videoEl: Ref<HTMLVideoElement | null>
   systemLatency: Ref<number>
-  onFrame: (frameData: { frame_id: number; timestamp: number; image_base64: string }) => void
+  // Phase 3.1: Model-related refs for dynamic configuration
+  modelId: Ref<string>
+  promptClasses: Ref<string[]>
+  selectedClasses: Ref<string[]>
+  onFrame: (frameData: { 
+    frame_id: number
+    timestamp: number
+    image_base64: string
+    model_id: string
+    prompt_classes: string[]
+    selected_classes: string[]
+  }) => void
 }
 
 interface UseVideoStreamReturn {
@@ -43,6 +56,9 @@ interface UseVideoStreamReturn {
 export function useVideoStream({
   videoEl,
   systemLatency,
+  modelId,
+  promptClasses,
+  selectedClasses,
   onFrame,
 }: UseVideoStreamOptions): UseVideoStreamReturn {
   const sourceType = ref<VideoSourceType>('local_file')
@@ -73,6 +89,10 @@ export function useVideoStream({
       frame_id:     frameId++,
       timestamp:    Date.now() / 1000,
       image_base64: offscreen.toDataURL('image/jpeg', VIDEO_JPEG_QUALITY),
+      // Phase 3.1: Include model-related fields for dynamic configuration
+      model_id: modelId.value,
+      prompt_classes: promptClasses.value,
+      selected_classes: selectedClasses.value,
     })
   }
 

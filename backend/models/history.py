@@ -47,13 +47,34 @@ class DetectionRecord(Base):
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
+        # Try to reconstruct detection_model from extra_data
+        detection_model = None
+        if self.extra_data and "model_config" in self.extra_data:
+            mc = self.extra_data["model_config"]
+            detection_model = {
+                "model_id": mc.get("model_id", self.model_name),
+                "display_name": mc.get("display_name", self.model_name),
+                "model_type": mc.get("model_type", "unknown"),
+                "prompt_classes": mc.get("prompt_classes", []),
+                "selected_classes": mc.get("selected_classes", []),
+            }
+        else:
+            # Fallback for legacy records without model_config
+            detection_model = {
+                "model_id": self.model_name,
+                "display_name": self.model_name,
+                "model_type": "unknown",
+                "prompt_classes": [],
+                "selected_classes": [],
+            }
+        
         return {
             "id": self.id,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "duration": self.duration,
             "video_name": self.video_name,
             "video_path": self.video_path,
-            "model_name": self.model_name,
+            "detection_model": detection_model,
             "class_counts": self.class_counts,
             "total_detections": self.total_detections,
             "status": self.status,

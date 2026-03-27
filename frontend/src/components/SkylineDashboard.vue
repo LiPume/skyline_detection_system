@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import type { Detection, ServerMessage, InferenceResult, SupportedModel } from '@/types/skyline'
-import { SUPPORTED_MODELS } from '@/types/skyline'
+import type { Detection, ServerMessage, InferenceResult } from '@/types/skyline'
 import { useWebSocket }      from '@/composables/useWebSocket'
 import { useVideoStream }    from '@/composables/useVideoStream'
 import { useCanvasRenderer } from '@/composables/useCanvasRenderer'
@@ -41,7 +40,7 @@ function tickFps() {
 }
 
 // ── AI console state ──────────────────────────────────────────────────────────
-const selectedModel = ref<SupportedModel>('YOLO-World-V2')
+const selectedModel = ref<string>('YOLO-World-V2')
 const promptInput   = ref('car, person, drone')
 const targetClasses = computed<string[]>(() =>
   promptInput.value.split(',').map((s) => s.trim()).filter(Boolean),
@@ -64,18 +63,28 @@ const { status: wsStatus, connect, disconnect, send } = useWebSocket({
 })
 
 // ── Video stream composable ───────────────────────────────────────────────────
-const { sourceType, isPlaying, hasVideo, loadFile, selectWebcam, startPush, stopPush, release } =
+const modelIdForStream = ref<string>('YOLO-World-V2')
+const promptClassesForStream = computed<string[]>(() => targetClasses.value)
+const selectedClassesForStream = ref<string[]>([])
+
+const { sourceType, isPlaying, hasVideo, loadFile, selectWebcam, startPush, stopPush } =
   useVideoStream({
     videoEl,
     systemLatency,
-    onFrame({ frame_id, timestamp, image_base64 }) {
+    modelId: modelIdForStream,
+    promptClasses: promptClassesForStream,
+    selectedClasses: selectedClassesForStream,
+    onFrame({ frame_id, timestamp, image_base64, model_id, prompt_classes, selected_classes }) {
       send(JSON.stringify({
         message_type:   'video_frame',
         frame_id,
         timestamp,
         image_base64,
-        selected_model: selectedModel.value,
-        target_classes: targetClasses.value,
+        model_id,
+        prompt_classes,
+        selected_classes,
+        selected_model: model_id,
+        target_classes: prompt_classes,
       }))
     },
   })
@@ -197,6 +206,9 @@ const stateClass = computed(() => ({
 const latencyClass = computed(() =>
   systemLatency.value > 200 ? 'metric--warn' : 'metric--ok',
 )
+
+const availableModels = ['YOLO-World-V2', 'YOLOv8-Base']
+
 </script>
 
 <template>
@@ -307,7 +319,7 @@ const latencyClass = computed(() =>
             <label class="ai-label">MODEL</label>
             <div class="ai-select-wrap">
               <select v-model="selectedModel" class="ai-select" :disabled="isLocked">
-                <option v-for="m in SUPPORTED_MODELS" :key="m" :value="m">{{ m }}</option>
+                <option v-for="m in availableModels" :key="m" :value="m">{{ m }}</option>
               </select>
               <span class="ai-select-arrow">&#9660;</span>
             </div>

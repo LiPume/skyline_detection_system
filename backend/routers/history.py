@@ -3,8 +3,8 @@ Skyline — Detection History API Router
 REST API endpoints for CRUD operations on detection records.
 """
 import os
-from typing import List, Optional
 from datetime import datetime
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
@@ -21,16 +21,25 @@ router = APIRouter(prefix="/history", tags=["history"])
 
 # ── Request / Response Schemas ──────────────────────────────────────────────────
 
+class ModelConfig(BaseModel):
+    """Model configuration used in a detection session."""
+    model_id: str
+    display_name: str
+    model_type: str
+    prompt_classes: list[str] = []
+    selected_classes: list[str] = []
+
+
 class SaveDetectionRequest(BaseModel):
     """Payload for creating a new detection record."""
-    video_name: str = Field(..., description="Original video file name")
-    duration: float = Field(..., ge=0, description="Analysis duration in seconds")
-    model_name: str = Field(..., description="AI model name, e.g. 'YOLO-World-V2'")
-    class_counts: dict = Field(default_factory=dict, description="Class name -> count mapping")
-    total_detections: int = Field(default=0, ge=0)
-    video_path: Optional[str] = Field(default=None)
-    thumbnail_path: Optional[str] = Field(default=None)
-    extra_data: dict = Field(default_factory=dict, description="Extra metadata stored as JSON")
+    video_name: str
+    duration: float = Field(ge=0)
+    detection_model: ModelConfig
+    class_counts: dict = {}
+    total_detections: int = 0
+    video_path: str | None = None
+    thumbnail_path: str | None = None
+    extra_data: dict = {}
 
 
 class DetectionRecordResponse(BaseModel):
@@ -39,18 +48,18 @@ class DetectionRecordResponse(BaseModel):
     created_at: str
     duration: float
     video_name: str
-    video_path: Optional[str]
-    model_name: str
+    video_path: str | None
+    detection_model: ModelConfig
     class_counts: dict
     total_detections: int
     status: str
-    thumbnail_path: Optional[str]
+    thumbnail_path: str | None
     metadata: dict
 
 
 class HistoryListResponse(BaseModel):
     """Paginated list of detection records."""
-    items: List[DetectionRecordResponse]
+    items: list[DetectionRecordResponse]
     total: int
     page: int
     limit: int
@@ -67,17 +76,21 @@ async def create_detection_record(
     Save a new detection record after analysis completes.
     Called automatically by the frontend when a video analysis session ends.
     """
+    # Store model config in extra_data for backward compatibility
+    extra_data = req.extra_data.copy()
+    extra_data["model_config"] = req.detection_model.model_dump()
+    
     record = DetectionRecord(
         created_at=datetime.utcnow(),
         duration=req.duration,
         video_name=req.video_name,
         video_path=req.video_path,
-        model_name=req.model_name,
+        model_name=req.detection_model.display_name,  # Keep model_name for backward compat
         class_counts=req.class_counts,
         total_detections=req.total_detections,
         status="completed",
         thumbnail_path=req.thumbnail_path,
-        extra_data=req.extra_data,
+        extra_data=extra_data,
     )
     db.add(record)
     await db.commit()
@@ -208,6 +221,19 @@ async def export_detection_data(
         raise HTTPException(status_code=404, detail=f"Record {record_id} not found")
 
     # Build structured export data
+    # Try to extract model_config from extra_data
+    model_config = None
+    if record.extra_data and "model_config" in record.extra_data:
+        model_config = record.extra_data["model_config"]
+    else:
+        model_config = {
+            "model_id": record.model_name,
+            "display_name": record.model_name,
+            "model_type": "unknown",
+            "prompt_classes": [],
+            "selected_classes": [],
+        }
+    
     export_data = {
         "record_id": record.id,
         "created_at": record.created_at.isoformat() if record.created_at else None,
@@ -216,9 +242,7 @@ async def export_detection_data(
             "path": record.video_path,
             "duration_seconds": record.duration,
         },
-        "model_info": {
-            "name": record.model_name,
-        },
+        "model_info": model_config,
         "statistics": {
             "total_detections": record.total_detections,
             "class_counts": record.class_counts,

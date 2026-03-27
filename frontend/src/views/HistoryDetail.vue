@@ -56,10 +56,6 @@ function formatDuration(seconds: number) {
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
 }
 
-function formatTime(iso: string) {
-  return iso.replace('T', '  ').substring(0, 19)
-}
-
 function formatDate(iso: string) {
   const d = new Date(iso)
   return d.toLocaleDateString('zh-CN', {
@@ -205,7 +201,10 @@ const maxCount = computed(() => {
             </div>
             <span class="text-xs text-slate-500 uppercase tracking-wider">分析模型</span>
           </div>
-          <p class="text-white font-medium text-sm">{{ record.model_name }}</p>
+          <p class="text-white font-medium text-sm">{{ record.detection_model?.display_name || record.detection_model?.model_id || '未知' }}</p>
+          <p v-if="record.detection_model?.model_type" class="text-slate-400 text-xs mt-1">
+            {{ record.detection_model.model_type === 'open_vocab' ? '开放词汇检测' : '固定类别检测' }}
+          </p>
         </div>
 
         <!-- Total Detections -->
@@ -300,9 +299,7 @@ const maxCount = computed(() => {
     path: record.video_path,
     duration_seconds: record.duration,
   },
-  model_info: {
-    name: record.model_name,
-  },
+  model_info: record.detection_model,
   statistics: {
     total_detections: record.total_detections,
     class_counts: record.class_counts,
