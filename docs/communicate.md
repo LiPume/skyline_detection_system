@@ -525,7 +525,7 @@ clean_classes: list[str] = []
 for c in target_classes:
     clean_classes.extend([x.strip().lower() for x in c.split(",") if x.strip()])
 
-# 2. 解码图像
+# 2. 解码图
 img = _decode_base64_image(image_base64)
 
 # 3. 推理（conf=0.01 极低阈值）

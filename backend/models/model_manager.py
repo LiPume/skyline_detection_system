@@ -29,7 +29,7 @@ from core.models import Detection
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_MODELS = ["YOLO-World-V2", "YOLOv8-Base"]
+SUPPORTED_MODELS = ["YOLO-World-V2", "YOLOv8-Base", "YOLOv8-Car"]
 
 # Resolve weights directory relative to this file: backend/models/ → ../../weights/
 WEIGHTS_DIR = Path(__file__).resolve().parent.parent.parent / "weights"
@@ -264,11 +264,93 @@ class YOLOv8Base(BaseVisionModel):
         return detections
 
 
+# ── YOLOv8-Car (custom fine-tuned, 5 vehicle classes) ─────────────────────────
+
+class YOLOv8Car(BaseVisionModel):
+    """
+    YOLOv8 fine-tuned on vehicle dataset (car, truck, bus, van, freight_car).
+
+    post-inference filter: results are pruned to class names that appear in
+    the user's selected_classes list (case-insensitive match).
+    Loads the custom weight from WEIGHTS_DIR / "yolov8_car.pt".
+    GPU warmup is skipped here because the model file may be large (≈400 MB);
+    warmup is safe to add later if startup latency becomes a concern.
+    """
+    name = "YOLOv8-Car"
+    _WEIGHT = WEIGHTS_DIR / "yolov8_car.pt"
+
+    def __init__(self) -> None:
+        self._model: Optional[YOLO] = None
+        self._load_lock  = threading.Lock()
+        self._infer_lock = threading.Lock()
+
+    def _ensure_loaded(self) -> YOLO:
+        if self._model is not None:
+            return self._model
+        with self._load_lock:
+            if self._model is None:
+                weight_path = str(self._WEIGHT)
+                logger.info("Loading YOLOv8-Car from %s …", weight_path)
+                self._model = YOLO(weight_path)
+                # Pin to GPU immediately so all subsequent predict() calls are on GPU
+                self._model.to("cuda:0")
+                logger.info("YOLOv8-Car loaded and pinned to cuda:0.")
+        return self._model
+
+    def infer(self, image_base64: str, target_classes: list[str]) -> list[Detection]:
+        """
+        Args:
+            image_base64: JPEG frame as "data:image/jpeg;base64,..." string
+            target_classes: ignored for closed-set models (use selected_classes instead)
+
+        Returns:
+            List of Detection(class_name, confidence, bbox=[x,y,w,h]) objects
+        """
+        model = self._ensure_loaded()
+        img = _decode_base64_image(image_base64)
+        h, w = img.shape[:2]
+
+        # Optional class filter (lowercase for case-insensitive match)
+        filter_set: Optional[set[str]] = (
+            {c.lower() for c in target_classes} if target_classes else None
+        )
+
+        detections: list[Detection] = []
+        try:
+            with self._infer_lock:
+                results = model.predict(img, verbose=False, conf=0.01, device=0)
+        finally:
+            del img
+
+        if results and results[0].boxes is not None:
+            boxes = results[0].boxes
+            names = results[0].names
+            for i in range(len(boxes)):
+                cls_idx  = int(boxes.cls[i])
+                cls_name = names.get(cls_idx, str(cls_idx))
+                # Apply user selected_classes filter
+                if filter_set and cls_name.lower() not in filter_set:
+                    continue
+                x1, y1, x2, y2 = boxes.xyxy[i].tolist()
+                conf = float(boxes.conf[i])
+                detections.append(Detection(
+                    class_name=cls_name,
+                    confidence=round(conf, 3),
+                    bbox=(int(x1), int(y1), int(x2 - x1), int(y2 - y1)),
+                ))
+
+        del results
+        logger.info("[%s] %dx%d → %d detection(s), filter=%s",
+                    self.name, w, h, len(detections), list(filter_set or []))
+        return detections
+
+
 # ── Registry & Factory ─────────────────────────────────────────────────────────
 
 _REGISTRY: dict[str, type[BaseVisionModel]] = {
     YOLOWorldV2.name: YOLOWorldV2,
     YOLOv8Base.name:  YOLOv8Base,
+    YOLOv8Car.name:  YOLOv8Car,
 }
 
 

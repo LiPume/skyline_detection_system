@@ -85,6 +85,16 @@ MODEL_REGISTRY: dict[str, ModelCapabilities] = {
         class_filter_enabled=True,  # Can filter which COCO classes to display
         description="COCO 预训练模型，支持 80 类固定类别。不可自定义类别，但可筛选显示。",
     ),
+    "YOLOv8-Car": ModelCapabilities(
+        model_id="YOLOv8-Car",
+        display_name="YOLOv8 Car (Custom)",
+        model_type="closed_set",
+        supports_prompt=False,
+        prompt_editable=False,
+        supported_classes=["car", "truck", "bus", "van", "freight_car"],
+        class_filter_enabled=True,
+        description="车辆专用模型，Fine-tuned on car, truck, bus, van, freight_car。不可自定义类别，但可筛选显示。",
+    ),
 }
 
 
