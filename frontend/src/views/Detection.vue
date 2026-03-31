@@ -57,8 +57,18 @@ const totalDetections = computed(() =>
   Object.values(classCounts.value).reduce((a, b) => a + b, 0),
 )
 
+// Max detections in a single frame (peak)
+const maxFrameDetections = ref(0)
+
+function updateMaxDetections(count: number) {
+  if (count > maxFrameDetections.value) {
+    maxFrameDetections.value = count
+  }
+}
+
 function resetStats() {
   classCounts.value = {}
+  maxFrameDetections.value = 0
   analysisDuration.value = 0
   saveState.value = 'idle'
 }
@@ -135,6 +145,8 @@ const { status: wsStatus, connect, disconnect, send } = useWebSocket({
       inferenceTime.value     = Math.round(r.inference_time_ms)
       currentDetections.value = r.detections
       tickFps()
+      // Update peak detection count for this frame
+      updateMaxDetections(r.detections.length)
       // Accumulate per-frame class counts
       for (const d of r.detections) {
         classCounts.value[d.class_name] = (classCounts.value[d.class_name] ?? 0) + 1
@@ -521,7 +533,8 @@ const stateInfo = computed(() => ({
                 <div class="text-cyan-400 text-sm font-medium tracking-wide">ANALYSIS COMPLETE</div>
                 <div class="text-slate-500 text-xs mt-0.5">
                   末帧检测到 {{ currentDetections.length }} 个目标
-                  <span v-if="totalDetections > 0" class="ml-1">· 共 {{ totalDetections }} 次检测</span>
+                  <span v-if="maxFrameDetections > 0" class="ml-1">· 最大帧检测数 {{ maxFrameDetections }}</span>
+                  <span v-if="totalDetections > 0" class="ml-1">· 累计 {{ totalDetections }} 次检测</span>
                 </div>
                 <div v-if="saveState === 'saving'" class="text-slate-600 text-xs mt-0.5 animate-pulse">
                   正在保存到历史记录库...
@@ -964,11 +977,11 @@ const stateInfo = computed(() => ({
               <div class="grid grid-cols-3 gap-4 text-center">
                 <div>
                   <div class="text-2xl font-bold font-mono text-blue-400">{{ totalDetections }}</div>
-                  <div class="text-xs text-slate-500 mt-1">检测次数</div>
+                  <div class="text-xs text-slate-500 mt-1">累计检测次数</div>
                 </div>
                 <div>
-                  <div class="text-2xl font-bold font-mono text-emerald-400">{{ Object.keys(classCounts).length }}</div>
-                  <div class="text-xs text-slate-500 mt-1">目标类别</div>
+                  <div class="text-2xl font-bold font-mono text-emerald-400">{{ maxFrameDetections }}</div>
+                  <div class="text-xs text-slate-500 mt-1">最大帧检测数</div>
                 </div>
                 <div>
                   <div class="text-2xl font-bold font-mono text-amber-400">{{ currentDetections.length }}</div>

@@ -49,6 +49,20 @@ const wsLabel = computed(() => ({
       <!-- Nav -->
       <nav class="flex-1 px-3 py-4 space-y-1">
         <RouterLink
+          to="/"
+          class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all duration-150 group"
+          :class="$route.path === '/'
+            ? 'bg-blue-600/20 text-blue-400 border border-blue-600/30'
+            : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'"
+        >
+          <span class="text-base">🏠</span>
+          <div>
+            <div class="font-medium">系统总览</div>
+            <div class="text-xs opacity-60">Dashboard</div>
+          </div>
+        </RouterLink>
+
+        <RouterLink
           to="/detection"
           class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all duration-150 group"
           :class="$route.path === '/detection'

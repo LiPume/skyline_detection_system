@@ -317,7 +317,7 @@ class _YOLOWorldV2(PTDetector):
     """YOLO-World-V2 open-vocabulary detector (ultralytics.YOLOWorld)."""
     model_id = "YOLO-World-V2"
     model_type = "open_vocab"
-    conf_threshold = 0.01
+    conf_threshold = 0.25   # 调高置信度阈值以减少误检
 
     def __init__(self, weight_path: Path | str, device: str = "cuda:0",
                  conf_threshold: float = 0.5) -> None:
@@ -348,7 +348,7 @@ class _YOLOv8Base(PTDetector):
     """YOLOv8n COCO pre-trained detector (ultralytics.YOLO)."""
     model_id = "YOLOv8-Base"
     model_type = "closed_set"
-    conf_threshold = 0.01
+    conf_threshold = 0.25
 
     def __init__(self, weight_path: Path | str, device: str = "cuda:0",
                  conf_threshold: float = 0.5) -> None:
@@ -425,7 +425,7 @@ class ONNXDetector(BaseDetector):
     """
 
     model_type = "closed_set"     # YOLOv8 ONNX is always fixed-class
-    conf_threshold = 0.01
+    conf_threshold = 0.25
 
     def __init__(
         self,
@@ -636,6 +636,103 @@ class ONNXDetector(BaseDetector):
         )
         return detections
 
+    @staticmethod
+    def _nms(
+        boxes: np.ndarray,
+        scores: np.ndarray,
+        class_indices: np.ndarray,
+        iou_threshold: float = 0.45,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Per-class Non-Maximum Suppression.
+
+        Args:
+            boxes: [N, 4] array of bounding boxes in xyxy format (model space).
+            scores: [N] array of confidence scores.
+            class_indices: [N] array of class indices.
+            iou_threshold: IoU threshold for NMS.
+
+        Returns:
+            Filtered (boxes, scores, class_indices) after NMS.
+        """
+        if len(boxes) == 0:
+            return boxes, scores, class_indices
+
+        # Convert to list for per-class processing
+        boxes = boxes.tolist()
+        scores = scores.tolist()
+        class_indices = class_indices.tolist()
+
+        # Group boxes by class
+        from collections import defaultdict
+        class_groups: dict[int, list[int]] = defaultdict(list)
+        for idx, cls_idx in enumerate(class_indices):
+            class_groups[int(cls_idx)].append(idx)
+
+        keep_indices: list[int] = []
+
+        # Apply NMS per class
+        for cls_idx, indices in class_groups.items():
+            cls_boxes = np.array([boxes[i] for i in indices], dtype=np.float32)
+            cls_scores = np.array([scores[i] for i in indices], dtype=np.float32)
+
+            # Sort by score descending
+            order = cls_scores.argsort()[::-1]
+
+            keep = []
+            suppressed = set()
+
+            for i in order:
+                if i in suppressed:
+                    continue
+                keep.append(i)
+                # Suppress overlapping boxes with lower scores
+                for j in order:
+                    if j == i or j in suppressed:
+                        continue
+                    iou = ONNXDetector._compute_iou(
+                        cls_boxes[i], cls_boxes[j]
+                    )
+                    if iou > iou_threshold:
+                        suppressed.add(j)
+
+            # Map back to global indices
+            for k in keep:
+                keep_indices.append(indices[k])
+
+        keep_indices = sorted(keep_indices)
+        return (
+            np.array([boxes[i] for i in keep_indices], dtype=np.float32),
+            np.array([scores[i] for i in keep_indices], dtype=np.float32),
+            np.array([class_indices[i] for i in keep_indices], dtype=np.int32),
+        )
+
+    @staticmethod
+    def _compute_iou(box1: np.ndarray, box2: np.ndarray) -> float:
+        """
+        Compute IoU between two boxes in xyxy format.
+
+        Args:
+            box1, box2: [4] arrays in [x1, y1, x2, y2] format.
+
+        Returns:
+            IoU value in [0, 1].
+        """
+        x1 = max(box1[0], box2[0])
+        y1 = max(box1[1], box2[1])
+        x2 = min(box1[2], box2[2])
+        y2 = min(box1[3], box2[3])
+
+        inter_area = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+        if inter_area == 0:
+            return 0.0
+
+        box1_area = (box1[2] - box1[0]) * (box1[3] - box1[1])
+        box2_area = (box2[2] - box2[0]) * (box2[3] - box2[1])
+        union_area = box1_area + box2_area - inter_area
+
+        return inter_area / union_area if union_area > 0 else 0.0
+
     def _preprocess(self, img: np.ndarray) -> np.ndarray:
         """
         Resize img to model input size and normalize to [0,1] float32.
@@ -720,6 +817,25 @@ class ONNXDetector(BaseDetector):
         scores = scores[mask]
         class_indices = class_indices[mask]
 
+        # ── 4.5. NMS (Non-Maximum Suppression) ─────────────────────────────────────
+        # Apply per-class NMS to remove overlapping boxes
+        # NMS needs xyxy format (top-left + bottom-right corners)
+        if len(bbox_cols) > 0:
+            # Convert from xywh (center + size) to xyxy (top-left + bottom-right)
+            cx, cy, bw, bh = bbox_cols[:, 0], bbox_cols[:, 1], bbox_cols[:, 2], bbox_cols[:, 3]
+            boxes_xyxy = np.stack([
+                cx - bw / 2,  # x1
+                cy - bh / 2,  # y1
+                cx + bw / 2,  # x2
+                cy + bh / 2,  # y2
+            ], axis=1)
+
+            boxes_xyxy, scores, class_indices = self._nms(
+                boxes_xyxy, scores, class_indices, iou_threshold=0.45
+            )
+            # Keep as xyxy for coordinate conversion below
+            bbox_cols = boxes_xyxy
+
         # ── 5. Letterbox → original image coordinate conversion ─────────────────
         # Model was trained / exported for 640x640 input.
         # _preprocess letterboxes the image into a 640x640 canvas.
@@ -734,23 +850,25 @@ class ONNXDetector(BaseDetector):
 
         detections: list[Detection] = []
         for j in range(len(bbox_cols)):
-            cx, cy, bw, bh = bbox_cols[j]
+            x1, y1, x2, y2 = bbox_cols[j]
 
             # Undo letterbox: model-space → scaled-image-space → original-space
-            ox = (cx - x_off) / orig_scale
-            oy = (cy - y_off) / orig_scale
-            ow = bw / orig_scale
-            oh = bh / orig_scale
+            ox1 = (x1 - x_off) / orig_scale
+            oy1 = (y1 - y_off) / orig_scale
+            ox2 = (x2 - x_off) / orig_scale
+            oy2 = (y2 - y_off) / orig_scale
 
-            # Convert center → top-left corner
-            x1 = int(round(ox - ow / 2.0))
-            y1 = int(round(oy - oh / 2.0))
+            # Convert to top-left + width/height format for Detection
+            x1 = int(round(ox1))
+            y1 = int(round(oy1))
+            ow = int(round(ox2 - ox1))
+            oh = int(round(oy2 - oy1))
 
             # Clip to original image bounds
             x1 = max(0, min(x1, iw - 1))
             y1 = max(0, min(y1, ih - 1))
-            ow = max(1, min(int(round(ow)), iw - x1))
-            oh = max(1, min(int(round(oh)), ih - y1))
+            ow = max(1, min(ow, iw - x1))
+            oh = max(1, min(oh, ih - y1))
 
             conf = float(scores[j])
             cls_idx = int(class_indices[j])

@@ -1,6 +1,6 @@
 # 前端页面样式描述（Skyline）
 
-> 依据当前 `skyline/frontend/src` 的 `Vue/HTML/CSS` 实现整理
+> 依据当前 `skyline/frontend/src` 的 `Vue/TypeScript` + `Tailwind CSS` 实现整理
 
 ---
 
@@ -13,56 +13,101 @@
 ---
 
 ## 2) 统一布局外观（`MainLayout.vue`）
-- 整体为“左侧导航 + 顶部标题栏 + 页面主体”结构：
+- 整体为"左侧导航 + 顶部标题栏 + 页面主体"结构：
   - 外层：`flex h-screen w-screen overflow-hidden bg-slate-950 text-slate-200`
   - 左侧：`aside` 固定宽度 `w-56`，背景 `bg-slate-950`，边框 `border-r border-slate-800`
   - 顶部：`header` 高度 `h-16`，半透明 `bg-slate-900/80`，并开启 `backdrop-blur`，底部分隔 `border-b border-slate-800`
 - 导航条（Sidebar Nav）：
-  - LOGO 区：高度 `h-16`，下边 `border-b border-slate-800`
-  - 路由链接：
+  - LOGO 区：高度 `h-16`，包含 logo 图片（带 fallback gradient）和"SKYLINE" / "AI VISION"文字
+  - 路由链接（RouterLink）：
     - 激活态：`bg-blue-600/20 text-blue-400 border border-blue-600/30`
     - 非激活态：`text-slate-400 hover:bg-slate-800 hover:text-slate-200`
+    - 每个链接包含 emoji 图标、中文标题、英文副标题
   - Footer：`v1.0.0 · SKYLINE IVAP`，使用 `text-xs text-slate-600`。
 - 顶部状态指示：
-  - WS/GPU 指示块均为“圆点 + 文本”，容器样式统一：
+  - WS/GPU 指示块均为"圆点 + 文本"，容器样式统一：
     - `px-3 py-1.5 rounded-lg bg-slate-800/60 border border-slate-700`
-  - 通过“颜色 + 脉冲”表达状态：
-    - WS：`connected` 用 `emerald-400`，`connecting` 用 `yellow` 并 `animate-pulse`，`disconnected` 用 `red`。
-    - GPU：`isGpuActive` 为真时圆点使用 `blue-400` 并 `animate-pulse`，否则为 `slate-600`。
+  - 通过"颜色 + 脉冲"表达状态：
+    - WS：`connected` 用 `emerald-400` + "ONLINE"，`connecting` 用 `yellow` + "SYNCING" 并 `animate-pulse`，`disconnected` 用 `red` + "OFFLINE"。
+    - GPU：`isGpuActive` 为真时圆点使用 `blue-400` 并 `animate-pulse`，显示 "ACTIVE"，否则为 `slate-600` + "IDLE"。
 
 ---
 
-## 3) 智能检测舱（`/detection`，`Detection.vue`）
-### 3.1 结构与色彩层级
+## 3) 首页仪表盘（`/`，`Dashboard.vue`）
+### 3.1 页面结构
+- 整体可滚动：`h-full overflow-y-auto`，配合固定网格背景
+- 网格背景：`fixed inset-0 pointer-events-none z-0`，使用 CSS linear-gradient 创建 48px 间隔的网格线 `rgba(30,41,59,0.3)`
+- 内容区：`relative z-10 px-6 py-6 space-y-8 max-w-screen-2xl mx-auto`
+
+### 3.2 Hero 区域
+- 顶部装饰线：`flex items-center gap-3`，包含渐变线与脉冲圆点
+- 双栏布局：`grid grid-cols-[1fr_1.15fr] gap-6 items-stretch`
+- 左侧：版本徽章 + 大标题 + 描述 + 能力标签
+  - 版本徽章：`inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-500/10 border border-blue-500/25 text-blue-400 text-xs font-mono`
+  - 主标题：使用渐变文字 `bg-gradient-to-r from-blue-400 via-cyan-400 to-blue-400`
+  - 能力标签：hover 时显示 `hover:border-cyan-500/50 hover:text-cyan-400`
+- 右侧：主视频展示区
+  - 四角 HUD 装饰线：`border-l-2 border-t-2 border-cyan-500/40 rounded-tl-lg`
+  - 视频区域：`rounded-2xl border border-slate-700/80 bg-slate-900/60`，最小高度 280px
+  - 底部状态标签：`bg-red-500/90 text-white`，包含脉冲圆点 + "LIVE DEMO"
+  - 视频错误时显示占位图与重试按钮
+
+### 3.3 核心能力区（Core Capabilities）
+- 三栏卡片：`grid grid-cols-3 gap-4`
+- 卡片样式：`rounded-xl border border-slate-800 bg-slate-900/50 p-5 hover:border-blue-500/40`
+- hover 效果：`hover:-translate-y-0.5` 配合 `transition-all duration-200`
+- 标签样式：`px-2 py-0.5 rounded text-xs font-mono bg-blue-500/10 border border-blue-500/20 text-blue-400/80`
+
+### 3.4 应用场景区（Application Scenarios）
+- 2x2 视频网格：`grid grid-cols-2 gap-4`
+- 每个场景卡片：`rounded-2xl border border-slate-800 bg-slate-900/50 overflow-hidden`
+- 视频容器：固定高度 220px，包含四角 HUD 装饰
+- hover 效果：`hover:border-blue-500/50 hover:-translate-y-0.5`
+- 视频标签：`absolute top-2 right-2 z-10`，样式 `bg-slate-800/85 border border-slate-600/50 text-slate-300 backdrop-blur-sm`
+- 底部信息：标题 + 副标题，左侧渐变遮罩 `bg-gradient-to-t from-slate-950/80 via-transparent to-transparent`
+
+### 3.5 功能入口区（Modules）
+- 三栏入口卡片：使用 `RouterLink` 组件
+- 卡片样式：`rounded-xl border border-slate-800 bg-slate-900/50 p-5`
+- hover 效果：
+  - `hover:border-emerald-500/50 hover:bg-slate-900/70`
+  - `hover:shadow-[0_0_20px_rgba(16,185,129,0.08)]`
+  - `hover:-translate-y-0.5`
+- 右侧箭头：`group-hover:text-emerald-400 group-hover:translate-x-1`
+- 底部进度条：hover 时渐变显示 `group-hover:bg-gradient-to-r group-hover:from-emerald-500/80`
+
+---
+
+## 4) 智能检测舱（`/detection`，`Detection.vue`）
+### 4.1 结构与色彩层级
 - 整体画布区 + 右侧控制台的左右分栏布局：
   - 根容器：`relative flex h-full bg-slate-950 overflow-hidden`
-  - 左侧“视觉舞台”（`flex-1`）：画布与叠层浮层都在同一 `bg-slate-950` 区域
-  - 右侧“AI 控制台”（`aside`）：宽度固定 `w-80 flex-shrink-0`，背景 `bg-slate-900`，分隔线 `border-l border-slate-800`
+  - 左侧"视觉舞台"（`flex-1`）：画布与叠层浮层都在同一 `bg-slate-950` 区域
+  - 右侧"AI 控制台"（`aside`）：宽度固定 `w-80 flex-shrink-0`，背景 `bg-slate-900`，分隔线 `border-l border-slate-800`
 
-### 3.2 叠层与动态提示（浮层体系）
-- Toast 通知栈（左侧画布上方居中）：
-  - 容器：`absolute top-4 left-1/2 -translate-x-1/2 z-50`，并设置 `min-width/max-width` 以限制宽度
-  - Toast 样式：`rounded-xl border text-sm backdrop-blur shadow-xl`
-  - 错误/警告使用不同语义色：
-    - error：`bg-red-950/90 border-red-700/70 text-red-300`
-    - warn：`bg-amber-950/90 border-amber-700/70 text-amber-300`
+### 4.2 状态机与浮层体系
+- 分析状态机（5 状态）：`standby | ready | analyzing | paused | finished`
 - 状态 Pill（左上角）：
-  - 基础外观：`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-xs font-mono ...`
-  - 根据状态切换不同背景/边框：
-    - standby：`text-slate-500 bg-slate-500/10 border-slate-600/40`
-    - ready：`text-emerald-400 bg-emerald-500/10 border-emerald-500/40`
-    - analyzing：`text-blue-400 bg-blue-500/10 border-blue-500/40`（分析中增加 `animate-pulse` 圆点）
-    - finished：`text-cyan-400 bg-cyan-500/10 border-cyan-500/40`
-- READY/FINISHED 浮层（画布底部左侧）：
-  - READY：`absolute bottom-5 left-5`，使用 `bg-slate-950/85` + `border-emerald-500/30` + `backdrop-blur`
-  - FINISHED：`absolute bottom-5 left-5`，使用 `border-cyan-500/30` 并以 `✓` 图标强化完成态
-- WebSocket 重连提示（分析尝试时显示）：
-  - `v-if="wsStatus !== 'connected' && isAnalyzing"`
-  - 背景 `bg-amber-950/85`，边框 `border-amber-700/60`，左上/居中定位并带 `animate-pulse` 小圆点。
-- 检测结果计数角标（右上角，仅 analyzing 且有目标时）：
-  - `absolute top-4 right-4`，`bg-slate-950/85 border border-blue-500/40`，`text-blue-400 text-xs font-mono`。
+  - standby：`text-slate-500 bg-slate-500/10 border-slate-600/40`，标签 "STANDBY"
+  - ready：`text-emerald-400 bg-emerald-500/10 border-emerald-500/40`，标签 "ARMED"
+  - analyzing：`text-blue-400 bg-blue-500/10 border-blue-500/40`（增加 `animate-pulse` 圆点），标签 "ANALYZING"
+  - paused：`text-amber-400 bg-amber-500/10 border-amber-500/40`，标签 "PAUSED"
+  - finished：`text-cyan-400 bg-cyan-500/10 border-cyan-500/40`，标签 "COMPLETE"
+- READY/FINISHED/PAUSED 浮层（画布底部左侧）：
+  - READY：`bg-slate-950/85 border-emerald-500/30 backdrop-blur`，圆点 `animate-pulse`
+  - PAUSED：`bg-slate-950/85 border-amber-500/30 backdrop-blur`
+  - FINISHED：`bg-slate-950/85 border-cyan-500/30 backdrop-blur`，显示保存状态
+- WebSocket 重连提示：`bg-amber-950/85 border-amber-700/60`，带 `animate-pulse` 小圆点
+- 检测结果计数角标（右上角）：`bg-slate-950/85 border border-blue-500/40`，`text-blue-400 text-xs font-mono`
+- Toast 通知栈（顶部居中）：
+  - 容器：`absolute top-4 left-1/2 -translate-x-1/2 z-50`，并设置 `min-width/max-width`
+  - Toast 样式：`rounded-xl border text-sm backdrop-blur shadow-xl`
+  - error：`bg-red-950/90 border-red-700/70 text-red-300`
+  - warn：`bg-amber-950/90 border-amber-700/70 text-amber-300`
+  - success：`bg-emerald-950/90 border-emerald-700/70 text-emerald-300`
+  - 动画：`TransitionGroup` 实现进入/离开动画
 
-### 3.3 左侧视觉舞台（Canvas + 拖拽区）
+### 4.3 左侧视觉舞台（Canvas + 拖拽区）
 - Canvas：
   - 画布在容器内铺满：`<canvas class="w-full h-full block">`
   - 外部套层保持深色底：`<div class="flex-1 relative bg-slate-950">`
@@ -74,109 +119,236 @@
     - 主提示：`text-slate-200 text-base font-medium`
     - 辅助：`text-slate-500 text-sm mt-1`
 
-### 3.4 右侧 AI 控制台（表单/按钮/指标）
+### 4.4 右侧 AI 控制台（表单/按钮/指标）
 - 控制台标题区：
   - `px-5 py-4 border-b border-slate-800`
   - 标题：`text-sm font-semibold text-white tracking-wide`
   - 说明：`text-xs text-slate-500 mt-0.5`
-- 内容区使用纵向间距：`flex-1 overflow-y-auto px-5 py-4 space-y-5`。
-- 表单输入与卡片元素统一风格（整体倾向“深底 + 细边框 + 圆角”）：
+- 内容区使用纵向间距：`flex-1 overflow-y-auto px-5 py-4 space-y-5`
+- 视频来源选择：
+  - 本地文件/实时摄像 两个按钮
+  - 选中态：`bg-blue-600/20 border-blue-500/50 text-blue-400`
+  - 未选中：`bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-600`
+  - 已加载视频指示：`bg-emerald-500/8 border border-emerald-500/20 text-emerald-400`
+- 模型信息横幅（根据模型类型变化）：
+  - 开放词汇模型：`bg-blue-500/10 border-blue-500/30`，标签 "开放词汇"
+  - 固定类别模型：`bg-amber-500/10 border-amber-500/30`，标签 "固定类别"
+- 表单输入与卡片元素：
   - `select`/`textarea` 默认底色 `bg-slate-800`，边框 `border-slate-700`，圆角 `rounded-lg`
   - 聚焦态：`focus:border-blue-500 focus:ring-1 focus:ring-blue-500/30`
-  - 禁用态：`disabled:opacity-40 disabled:cursor-not-allowed`。
+  - 禁用态：`disabled:opacity-40 disabled:cursor-not-allowed`
+- 开放词汇模型配置：
+  - 快捷类别芯片：`px-2.5 py-1 rounded-full border text-xs`
+  - 选中：`border-blue-500/50 bg-blue-500/10 text-blue-400`
+  - Prompt 输入框：`textarea` + `font-mono`，显示解析后的类别 chip
+- 固定类别模型配置：
+  - 提示横幅：`bg-amber-500/5 border border-amber-500/20 text-amber-400`
+  - 类别网格：`grid grid-cols-2 gap-1`，支持全选/清空
+  - 选中态：`bg-blue-500/20 border border-blue-500/40 text-blue-400`
 - CTA 按钮（底部主要操作区）：
-  - “启动分析”：可执行时为渐变高亮 `bg-gradient-to-r from-blue-600 to-blue-500` + `shadow-lg`
+  - "启动实时分析" / "重新启动分析"：可执行时为渐变高亮 `bg-gradient-to-r from-blue-600 to-blue-500` + `shadow-lg`
   - 不可执行/禁用：`bg-slate-800 border border-slate-700 text-slate-500 cursor-not-allowed`
-  - “停止分析”：危险语义 `bg-red-950/60 border border-red-700/60 text-red-400`，hover 时强化边框/底色并允许 `active:scale-[0.98]`
+  - "暂停分析"：危险语义 `bg-amber-600/20 border border-amber-600/40 text-amber-400`
+  - "继续播放"：`bg-emerald-600/20 border border-emerald-600/40 text-emerald-400`
+  - "停止分析"：危险语义 `bg-red-950/60 border border-red-700/60 text-red-400`
 - 性能监控卡片：
-  - 延迟卡片：`bg-slate-800/60 rounded-lg p-3 border border-slate-700/50`，并以进度条 `h-1.5 bg-slate-700 overflow-hidden` 表达节流/压力状态。
-  - 推理耗时与吞吐量：`grid grid-cols-2 gap-2`，每个指标同样使用深色卡片与强调色（如 `text-blue-400` / `text-emerald-400`）。
+  - 延迟卡片：`bg-slate-800/60 rounded-lg p-3 border border-slate-700/50`
+  - 进度条表达节流状态：`h-1.5 bg-slate-700 overflow-hidden`
+  - 推理耗时与吞吐量：`grid grid-cols-2 gap-2`
 - 网络控制：
   - 两个并排按钮：`flex gap-2`，每个 `flex-1 py-2 rounded-lg border text-xs font-medium`
-  - hover 的强调色分别落在红/蓝语义上，并由 `disabled:opacity-35` 控制禁用反馈。
+  - hover 的强调色分别落在红/蓝语义上，并由 `disabled:opacity-35` 控制禁用反馈
+
+### 4.5 暂停对话框（Modal）
+- 使用 `<Teleport to="body">` 渲染
+- 遮罩：`bg-black/80 backdrop-blur-sm`
+- 内容：`max-w-md mx-4 bg-slate-900 rounded-2xl border border-slate-700`
+- 统计数据卡片：`grid grid-cols-3 gap-4 text-center`
+  - 检测次数：`text-blue-400`
+  - 目标类别：`text-emerald-400`
+  - 当前帧目标：`text-amber-400`
+- 操作按钮：继续播放（绿色渐变）、保存到历史记录库（蓝色边框）
+- 键盘提示：`text-slate-600 text-xs`，`<kbd>` 标签样式
 
 ---
 
-## 4) 历史记录库（`/history`，`History.vue`）
-### 4.1 页面容器
-- 根容器：`h-full bg-slate-950 flex flex-col overflow-hidden`。
+## 5) 历史记录库（`/history`，`History.vue`）
+### 5.1 页面容器
+- 根容器：`h-full bg-slate-950 flex flex-col overflow-hidden`
 - 顶部标题区：
   - `px-8 py-6 flex-shrink-0 border-b border-slate-800`
   - 主标题：`text-lg font-semibold text-white`
   - 子标题：`text-sm text-slate-500 mt-0.5`
-- 搜索/筛选（当前为占位 UI）：
-  - 搜索框样式：`px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-slate-500`
-  - 筛选按钮样式：`px-4 py-2 rounded-lg bg-slate-800 border border-slate-700 text-slate-400 hover:border-slate-600`
+  - 右侧刷新按钮：`px-4 py-2 rounded-lg bg-slate-800 border border-slate-700 text-slate-400`
+- 错误横幅：`mx-8 mt-4 px-4 py-3 rounded-lg bg-red-950/70 border border-red-700/60 text-red-300`
 
-### 4.2 表格与行样式
+### 5.2 表格与行样式
+- 加载骨架屏：`v-if="isLoading"` 时显示 5 个脉冲占位 `animate-pulse`
 - 表格外层卡片：
   - `rounded-xl border border-slate-800 overflow-hidden bg-slate-900/50`
   - Header：`grid` 布局，并带 `bg-slate-900` + `border-b border-slate-800`
-  - 表头文字统一为：`text-xs font-medium text-slate-500 tracking-wider uppercase`
+  - 列宽：`grid-cols-[56px_1fr_120px_180px_100px_100px_180px]`
+  - 表头文字：`text-xs font-medium text-slate-500 tracking-wider uppercase`
 - 每行使用 `grid` 对齐列宽，并通过 hover 提升可读性：
   - `hover:bg-slate-800/40`
   - 行分隔：除最后一行外使用 `border-b border-slate-800/60`
 - 单元格内部细节：
   - 序号占位格：`w-10 h-8 rounded-md bg-slate-800 border border-slate-700 text-slate-600 text-xs font-mono`
-  - 类别标签（chips）颜色来自 `classColorMap`，统一表现为：深底半透明 + 对应颜色边框/文字（例如 `car` 用 yellow 语义等）。
+  - 类别标签（chips）颜色来自 `classColorMap`
   - 状态标签（status pill）：
-    - 统一为绿色语义：`bg-emerald-500/10 border border-emerald-500/25 text-emerald-400`
-    - 含小圆点装饰：`w-1.5 h-1.5 rounded-full bg-emerald-400`
-  - 操作按钮：`bg-slate-800 border border-slate-700 text-slate-300 hover:border-blue-600 hover:text-blue-400`
+    - completed：`bg-emerald-500/10 border border-emerald-500/25 text-emerald-400`
+    - failed：`bg-red-500/10 border border-red-500/25 text-red-400`
+- 操作按钮组：
+  - 查看数据：`bg-slate-800 border border-slate-700`，hover `border-blue-600 text-blue-400`
+  - 下载 JSON：`bg-slate-800`，hover `border-purple-600 text-purple-400`
+  - 下载视频：`bg-slate-800`，hover `border-emerald-600 text-emerald-400`
+  - 在线播放：`bg-slate-800`，hover `border-cyan-600 text-cyan-400`
+  - 删除：`bg-slate-800`，hover `border-red-600 text-red-400`
 
-### 4.3 空态
-- 当 `records.length === 0` 时，使用居中空态：
+### 5.3 空态
+- 当 `records.length === 0 && !errorMsg` 时，使用居中空态：
   - `flex flex-col items-center justify-center py-20 text-slate-600`
-  - 搭配图标与 `text-sm` 文本提示 `暂无历史记录`。
+  - 搭配图标与 `text-sm` 文本提示 `暂无历史记录`
+  - 辅助提示：`text-xs text-slate-700 mt-1`
+
+### 5.4 视频预览弹窗
+- 使用 `<Teleport to="body">` + `Transition name="modal"`
+- 遮罩：`bg-black/80 backdrop-blur-sm`
+- 内容：`max-w-4xl mx-4 bg-slate-900 rounded-2xl border border-slate-700`
+- 视频播放器：`aspect-video bg-black`，controls + autoplay
+- 模态框动画：进入/离开 `transition: all 0.25s ease`
 
 ---
 
-## 5) 性能分析页（`/performance`，`Performance.vue`）
-### 5.1 页面容器与布局
-- 根容器：`h-full bg-slate-950 flex flex-col overflow-hidden`，与 History.vue 结构一致。
-- 顶部标题区：`px-8 py-6 flex-shrink-0 border-b border-slate-800`，主标题 `text-lg font-semibold text-white`，子标题 `text-sm text-slate-500 mt-0.5`。
+## 6) 历史详情页（`/history/:id`，`HistoryDetail.vue`）
+### 6.1 页面头部
+- 返回按钮：`p-2 rounded-lg bg-slate-800 border border-slate-700`
+- 操作按钮：下载 JSON（紫色）、下载视频（绿色）
 
-### 5.2 Tab 切换
-- Tab 栏：`flex gap-1 p-1 bg-slate-900/80 rounded-lg border border-slate-800`
-- 激活态 Tab：`bg-slate-800 text-white rounded-md`
-- 非激活态 Tab：`text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 rounded-md`
-- 四个 Tab：总览、P-R 曲线、类别分析、测试报告
+### 6.2 概览卡片
+- 四栏网格：`grid grid-cols-4 gap-4`
+- 每个卡片：`bg-slate-900 rounded-xl border border-slate-800 p-5`
+  - 图标：`p-2 rounded-lg bg-{color}-500/15`
+  - 标签：`text-xs text-slate-500 uppercase tracking-wider`
+- 视频信息卡：蓝色图标，显示文件名和时长
+- 模型信息卡：紫色图标，显示模型名称和类型
+- 总检测数卡：绿色图标，显示总检测数（大字体）
+- 分析时间卡：橙色图标，显示创建时间
 
-### 5.3 总览 Tab（Overview）
-- 顶部指标卡网格：`grid grid-cols-4 gap-4`，每个卡片 `rounded-xl border border-slate-800 bg-slate-900/50 p-5`
-- 关键指标使用语义强调色：
-  - mAP@0.5：数字使用 `text-blue-400`，下方标签 `text-xs text-slate-500`
-  - Precision / Recall / FPS：分别使用 `text-emerald-400` / `text-purple-400` / `text-amber-400`
-  - 推理延迟：使用 `text-red-400`（数值越大越红）
-- 辅助指标（mAP@0.5:0.95、类别数、检测总数）：`text-slate-300`，次级标签 `text-xs text-slate-600`
-- 类别 AP 网格：每个类别卡片 `rounded-lg border border-slate-800 bg-slate-900/50 p-4`，左侧显示类别名称 `text-sm text-slate-300`，右侧 AP 值 `text-blue-400 text-lg font-semibold`
+### 6.3 检测类别统计
+- 横向条形图：`flex items-center gap-4`
+- 类别标签：`px-3 py-1 rounded-lg border text-sm font-mono min-w-[100px]`
+- 进度条：`flex-1 h-8 bg-slate-800 rounded-lg overflow-hidden`
+- 数量显示：`text-white font-mono font-bold`
 
-### 5.4 P-R 曲线 Tab
-- 图表区：`rounded-xl border border-slate-800 bg-slate-900/50 p-6`
-- 类别选择器：`flex flex-wrap gap-2 mb-4`，每个类别为 pill 按钮 `px-3 py-1 rounded-full text-xs border`
-- P-R 曲线图当前为空占位 SVG，绑定 ECharts 实例但无实际数据渲染
-- AP 详情表格：`rounded-lg border border-slate-800 overflow-hidden`，表头 `bg-slate-900 text-xs font-medium text-slate-500 uppercase`
+### 6.4 JSON 数据预览
+- 代码块：`bg-slate-950 rounded-lg p-4 font-mono text-xs overflow-x-auto max-h-80`
+- 下载按钮：`bg-slate-800 border border-slate-700`，hover `border-purple-600 text-purple-400`
 
-### 5.5 类别分析 Tab
-- 四个子卡片区域，均使用 `rounded-xl border border-slate-800 bg-slate-900/50 p-6`：
-  - 置信度分布图（空 SVG 占位）
-  - 检测时间线（空 SVG 占位）
-  - 物体大小分布（空 SVG 占位）
-  - 空间热力图（空 SVG 占位）
-
-### 5.6 测试报告 Tab
-- 拖拽上传区：`rounded-xl border-2 border-dashed border-slate-700 hover:border-blue-500/50 bg-slate-900/50 p-8`，居中图标与文字
-- 已导入文件列表：`space-y-2`，每项 `rounded-lg border border-slate-800 bg-slate-900/50 p-3 flex items-center gap-3`
-- 测试报告表格结构同 AP 详情表
-
-### 5.7 当前状态（数据层）
-- **所有数据均为 Mock 硬编码**（lines 19-43），无真实 API 调用，无评测管道连接。
-- `performanceMetrics`、`classMetrics`、`testReports` 均为本地 `ref` 初始化，无 `fetch` / WebSocket 数据源。
-- 文件导入 `handleFiles()` 只有 TODO 注释，无实际实现。
-- GPU 利用率监控无代码采集。
+### 6.5 数据结构说明
+- 双栏网格：`grid grid-cols-2 gap-4`
+- 每个字段卡片：`bg-slate-800/50 rounded-lg p-3`
+- 字段名：使用对应语义色（`text-blue-400`、`text-emerald-400` 等），`font-mono`
+- 说明：`text-slate-500 text-xs mt-1`
 
 ---
 
-## 6) 组件/原型说明（`SkylineDashboard.vue`）
-- 项目中仍包含一个 `SkylineDashboard.vue`，其样式使用 `scoped` 的“霓虹荧光（neon）+ Courier 字体风格”而非当前页面的 Tailwind 风格。
-- 当前路由页面主要由 `Detection.vue` 与 `History.vue` 构成；该文件可视为历史原型/备用实现，因此其样式体系与本页文档的 Tailwind 规范相互独立。
+## 7) 模型评估页（`/performance`，`Performance.vue`）
+### 7.1 页面容器与布局
+- 根容器：`h-full bg-slate-950 flex flex-col overflow-hidden`
+- 顶部标题区：`px-8 py-5 flex-shrink-0 border-b border-slate-800`
+  - 主标题 `text-base font-semibold text-white`，子标题 `text-xs text-slate-500`
+  - 右侧按钮：导出报告（outline）、查看测试报告（蓝色填充）
+- Tab 导航：`px-8 pt-4 pb-0`
+  - 容器：`flex gap-1 bg-slate-900/60 p-1 rounded-xl w-fit border border-slate-800`
+  - 四个 Tab：总览、训练过程、标准评测、类别分析
+
+### 7.2 总览 Tab（Overview）
+- 顶部指标卡网格：`grid grid-cols-6 gap-4`
+  - mAP@0.5：`text-3xl text-blue-400`，进度条 `bg-blue-500`
+  - mAP@0.5:0.95：条件颜色（≥0.5 绿色，否则黄色）
+  - Precision/Recall：条件颜色（≥0.75 绿色，否则黄色）
+  - FPS：`text-cyan-400`，说明 "实时处理"
+  - 推理耗时：`text-amber-400`，说明 "单帧平均"
+- 两列布局（模型配置 + 训练摘要）：
+  - 卡片：`rounded-xl border border-slate-800 bg-slate-900/50 p-5`
+  - 左侧色条：4px 圆角 `w-1 h-4 rounded-full`
+  - 双栏配置列表：`grid grid-cols-2 gap-x-6 gap-y-3`
+- 评测摘要卡片：
+  - 四栏数据：`grid grid-cols-4 gap-4`
+  - 状态标签：`bg-emerald-500/15 border border-emerald-500/25 text-emerald-400`
+- 类别 AP 排名：
+  - 横向条形图 + 排名数字
+  - 颜色条件：≥75% 绿色，≥50% 黄色，<50% 红色
+
+### 7.3 训练过程 Tab（Train）
+- 说明区 + 图例：`flex items-center justify-between`
+- 损失收敛曲线卡片：
+  - SVG 图表：支持平滑曲线（`buildSmoothPath`）和面积填充（`buildAreaPath`）
+  - 网格线：`stroke="#1e293b" stroke-width="1" stroke-dasharray="4,4"`
+  - 训练曲线：蓝色 `#3b82f6`，验证曲线：琥珀色 `#f59e0b` + 虚线
+  - 图例行：`grid grid-cols-6 gap-3`
+- 精度演进曲线：
+  - 多指标：`Precision`(蓝) / `Recall`(青) / `mAP@0.5`(绿) / `mAP@0.5:0.95`(蓝绿虚线)
+  - 最佳轮次标记：垂直虚线 + `★ E{epoch}` 标签
+- 学习率曲线 + 最佳轮次摘要：
+  - 三栏布局（lr曲线占2列，摘要卡占1列）
+  - LR 曲线：`pg0`(青) / `pg1`(蓝) / `pg2`(靛蓝)
+  - 摘要卡：显示最佳轮次各项指标
+
+### 7.4 标准评测 Tab（Eval）
+- PR 曲线展示区：
+  - `rounded-xl border border-slate-800 bg-slate-900/50`
+  - 图片展示：`max-w-2xl rounded-lg overflow-hidden`，支持 `@error` 处理
+  - 失败占位：显示 "PR 曲线预留区" + 重试按钮
+- AP 详细数据表格：
+  - 表头：`px-5 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider`
+  - 单元格：带颜色编码的 AP 值
+  - 达标状态：≥75% 显示 "达标"（绿色），否则 "待优化"（黄色）
+- 整体评测结论：
+  - 四栏指标卡 + 评测场景描述
+  - 结论文本：`p-4 rounded-lg bg-slate-800/30 border border-slate-700/50`
+
+### 7.5 类别分析 Tab（Class）
+- 类别 AP@0.5 排行：
+  - 排名样式：🥇 金色 / 🥈 银色 / 🥉 铜色 / 普通灰色
+  - 条形图 + 数值
+  - AP@0.5:0.95 分隔区域（半透明）
+- 类别样本统计：
+  - 五栏网格：`grid grid-cols-5 gap-4`
+  - 样本量比例条：`h-1 bg-slate-700 rounded-full`
+- 类别表现分析卡：
+  - 条件边框/背景：`emerald/yellow/red` 根据 AP 值
+  - 类别徽章：首字母缩写 + 背景色
+  - P/R/AP 三栏数据
+  - 备注文本：对应语义色边框/背景
+
+### 7.6 当前状态（数据层）
+- **训练数据**：来自 `yolo_car_results.csv` 的 300 epochs 硬编码数据
+- **评测数据**：本地 Mock 数据（`summaryMetrics`、`evaluationResult`、`classMetrics`）
+- PR 曲线：使用静态图片 `/metrics/pr_curve.png`，带错误处理 fallback
+- 无真实 API 调用，无评测管道连接
+
+---
+
+## 8) 组件/原型说明
+### SkylineDashboard.vue
+- 项目中仍包含一个 `SkylineDashboard.vue`，其样式使用 `scoped` 的"霓虹荧光（neon）+ Courier 字体风格"而非当前页面的 Tailwind 风格。
+- 当前路由页面主要由 `Dashboard.vue`、`Detection.vue`、`History.vue`、`HistoryDetail.vue`、`Performance.vue` 构成；该文件可视为历史原型/备用实现，因此其样式体系与本页文档的 Tailwind 规范相互独立。
+
+### MainLayout.vue
+- 当前应用的主布局组件，包含侧边栏导航、顶部状态栏和内容区域
+- 使用 Vue Router 的 `<RouterView />` 渲染子路由页面
+
+### 状态管理（`store/systemStatus.ts`）
+- `wsStatus`：WebSocket 连接状态（`connected` | `connecting` | `disconnected`）
+- `isGpuActive`：GPU 是否处于活跃状态
+- 状态在 Detection.vue 中被监听并同步更新
+
+### API 层（`api/history.ts`）
+- `listHistory()`：获取历史记录列表
+- `getHistory(id)`：获取单条历史记录详情
+- `deleteHistory(id)`：删除历史记录
+- `saveDetection()`：保存检测结果
+- `getVideoUrl(id)`：获取视频下载 URL
+- `getDataUrl(id)`：获取 JSON 数据 URL
