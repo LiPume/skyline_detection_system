@@ -81,7 +81,7 @@ class ModelConfig:
     """
     runtime_type: Literal["pt", "onnx", "trt", "openvino"]
     weight_path: Path | str          # Relative to WEIGHTS_DIR, or absolute
-    confidence_threshold: float = 0.5
+    confidence_threshold: float = 0.3
     warmup_enabled: bool = True      # Run dummy inference after first load
     device: str = "cuda:0"          # CUDA device string; "cpu" for fallback
 
@@ -157,14 +157,14 @@ RUNTIME_CONFIG: dict[str, ModelConfig] = {
     "YOLO-World-V2": ModelConfig(
         runtime_type="pt",
         weight_path=_WEIGHTS_DIR / "yolov8s-worldv2.pt",
-        confidence_threshold=0.5,
+        confidence_threshold=0.3,
         warmup_enabled=True,
         device="cuda:0",
     ),
     "YOLOv8-Base": ModelConfig(
         runtime_type="pt",
         weight_path="yolov8n.pt",          # ultralytics auto-downloads to ~/.cache/
-        confidence_threshold=0.5,
+        confidence_threshold=0.3,
         warmup_enabled=False,              # Small model, no warmup needed
         device="cuda:0",
     ),
