@@ -40,16 +40,9 @@ function showToast(text: string, type: Toast['type'] = 'error', ms = 4000) {
 // ── Telemetry ──────────────────────────────────────────────────────────────────
 const systemLatency     = ref(0)
 const inferenceTime     = ref(0)
+const inferenceFps       = ref(0)   // 实际推理FPS：1000 / inference_time_ms
 const currentDetections = ref<Detection[]>([])
-const displayFps        = ref(0)
 const isDragging        = ref(false)
-
-let fpsCount = 0, fpsLast = Date.now()
-function tickFps() {
-  fpsCount++
-  const now = Date.now()
-  if (now - fpsLast >= 1000) { displayFps.value = fpsCount; fpsCount = 0; fpsLast = now }
-}
 
 // ── Detection statistics ───────────────────────────────────────────────────────
 const classCounts     = ref<Record<string, number>>({})
@@ -143,8 +136,9 @@ const { status: wsStatus, connect, disconnect, send } = useWebSocket({
       const r = msg as InferenceResult
       systemLatency.value     = Math.round((Date.now() / 1000 - r.timestamp) * 1000)
       inferenceTime.value     = Math.round(r.inference_time_ms)
+      // 计算实际推理FPS：1000ms / 单帧推理时间ms
+      inferenceFps.value      = r.inference_time_ms > 0 ? Math.round(1000 / r.inference_time_ms * 10) / 10 : 0
       currentDetections.value = r.detections
-      tickFps()
       // Update peak detection count for this frame
       updateMaxDetections(r.detections.length)
       // Accumulate per-frame class counts
@@ -898,9 +892,6 @@ const stateInfo = computed(() => ({
                   :style="{ width: isAnalyzing ? `${Math.min((systemLatency / LATENCY_BAR_MAX_MS) * 100, 100)}%` : '0%' }"
                 ></div>
               </div>
-              <p v-if="systemLatency > LATENCY_THROTTLE_THRESHOLD_MS && isAnalyzing" class="text-xs text-amber-500/80 mt-1.5">
-                ↓ 已自动节流至 10 FPS
-              </p>
             </div>
 
             <!-- Inference + FPS -->
@@ -912,10 +903,11 @@ const stateInfo = computed(() => ({
                 </div>
               </div>
               <div class="bg-slate-800/60 rounded-lg p-3 border border-slate-700/50">
-                <div class="text-xs text-slate-500 mb-1">吞吐量</div>
+                <div class="text-xs text-slate-500 mb-1">吞吐量(算法FPS)</div>
                 <div class="text-lg font-bold font-mono tabular-nums text-emerald-400">
-                  {{ isAnalyzing ? displayFps : '—' }}<span class="text-xs font-normal opacity-70 ml-0.5">FPS</span>
+                  {{ isAnalyzing ? inferenceFps : '—' }}<span class="text-xs font-normal opacity-70 ml-0.5">FPS</span>
                 </div>
+                <div class="text-xs text-slate-600 mt-0.5">1000ms / 推理耗时</div>
               </div>
             </div>
           </div>

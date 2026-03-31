@@ -27,17 +27,10 @@ const isLocked    = computed(() => analysisState.value === 'analyzing') // disab
 // ── Telemetry state ───────────────────────────────────────────────────────────
 const systemLatency     = ref(0)
 const inferenceTime     = ref(0)
+const inferenceFps       = ref(0)   // 实际推理FPS：1000 / inference_time_ms
 const currentDetections = ref<Detection[]>([])
-const displayFps        = ref(0)
 const errorBanner       = ref('')
 const isDragging        = ref(false)
-
-let fpsCount = 0, fpsLast = Date.now()
-function tickFps() {
-  fpsCount++
-  const now = Date.now()
-  if (now - fpsLast >= 1000) { displayFps.value = fpsCount; fpsCount = 0; fpsLast = now }
-}
 
 // ── AI console state ──────────────────────────────────────────────────────────
 const selectedModel = ref<string>('YOLO-World-V2')
@@ -53,8 +46,9 @@ const { status: wsStatus, connect, disconnect, send } = useWebSocket({
       const r = msg as InferenceResult
       systemLatency.value     = Math.round((Date.now() / 1000 - r.timestamp) * 1000)
       inferenceTime.value     = Math.round(r.inference_time_ms)
+      // 计算实际推理FPS：1000ms / 单帧推理时间ms
+      inferenceFps.value      = r.inference_time_ms > 0 ? Math.round(1000 / r.inference_time_ms * 10) / 10 : 0
       currentDetections.value = r.detections
-      tickFps()
     } else if (msg.message_type === 'error') {
       errorBanner.value = msg.detail
       setTimeout(() => { errorBanner.value = '' }, 4000)
@@ -392,13 +386,11 @@ const availableModels = ['YOLO-World-V2', 'YOLOv8-Base']
             </div>
           </div>
           <div class="metric-block">
-            <div class="metric-label">THROUGHPUT</div>
-            <div class="metric-value metric--ok">
-              {{ isAnalyzing ? displayFps : '—' }}<span class="metric-unit">FPS</span>
+            <div class="metric-label">THROUGHPUT (ALGORITHM)</div>
+            <div class="metric-value metric--cyan">
+              {{ isAnalyzing ? inferenceFps : '—' }}<span class="metric-unit">FPS</span>
             </div>
-            <div v-if="systemLatency > 200 && isAnalyzing" class="throttle-badge">
-              &#9660; THROTTLED 10 FPS
-            </div>
+            <div class="metric-subtext">1000ms / inference_time</div>
           </div>
         </section>
 
