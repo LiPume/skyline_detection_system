@@ -1,13 +1,22 @@
 """
-Skyline — Inference Scheduler (Phase 3.1: Model Capability Driven Inference)
+Skyline — Inference Scheduler (Refactored: Unified Runtime Architecture)
 
-Changes from Phase 3:
-  - Now uses model_id from VideoFrame to select the correct model
-  - Differentiates between open_vocab (YOLO-World) and closed_set (YOLOv8) models
-  - open_vocab models: use prompt_classes as detection targets
-  - closed_set models: use selected_classes for post-inference filtering
-  - Added model capability validation and error handling
+Changes from Phase 3.1:
+  - inference.py no longer imports PT-specific modules
+  - Calls get_detector(model_id) which dispatches to PTDetector or ONNXDetector internally
+  - ModelManager reads RUNTIME_CONFIG[model_id].runtime_type to choose the factory
+  - _blocking_inference sends unified args to detector.infer():
+      open_vocab  → infer(image_base64, prompt_classes=[...], selected_classes=[])
+      closed_set  → infer(image_base64, prompt_classes=[], selected_classes=[...])
+    Post-inference class filtering is now handled INSIDE BaseDetector.infer().
+  - Adding TensorRT / OpenVINO requires zero changes here
+
+Error handling:
+  - ValueError: base64 decode failure or unknown model name → empty detections
+  - RuntimeError: CUDA OOM or PyTorch errors → empty detections + specific log
+  - Exception (catch-all): any other model failure → empty detections + error log
 """
+
 import asyncio
 import logging
 import time as _time
@@ -16,8 +25,8 @@ from typing import Callable, Coroutine, Optional
 from starlette.concurrency import run_in_threadpool
 
 from core.models import InferenceResult, VideoFrame
-from models.model_manager import get_model
-from models.registry import get_model_capabilities, filter_supported_classes
+from models.model_manager import get_detector
+from models.registry import get_model_capabilities
 
 logger = logging.getLogger(__name__)
 
@@ -30,81 +39,72 @@ def _blocking_inference(frame: VideoFrame) -> InferenceResult:
     """
     CPU/GPU-bound inference — runs in a thread pool (keeps asyncio event loop free).
 
-    Model type handling:
-      - open_vocab (YOLO-World): uses prompt_classes as detection targets
-      - closed_set (YOLOv8): ignores prompt_classes, uses selected_classes for filtering
+    This function is completely runtime-agnostic. It does NOT know whether the
+    detector uses PT or ONNX. It simply:
+      1. Resolves model_id (with legacy fallback)
+      2. Validates model exists in registry
+      3. Determines which class list to send based on model_type
+      4. Calls detector.infer() — all runtime logic is encapsulated inside the detector
+      5. Wraps result in InferenceResult
 
-    Error handling:
-      - ValueError: base64 decode failure or unknown model name → empty detections
-      - RuntimeError: CUDA OOM or PyTorch errors → empty detections + specific log
-      - Exception (catch-all): any other model failure → empty detections + error log
+    open_vocab models:    infer(image_base64, prompt_classes=[...], selected_classes=[])
+    closed_set models:     infer(image_base64, prompt_classes=[], selected_classes=[...])
     """
     t0 = _time.perf_counter()
 
-    # Resolve model_id with fallback for legacy selected_model field
+    # ── 1. Resolve model_id (with legacy selected_model fallback) ─────────────
     selected_model = frame.model_id or frame.selected_model or DEFAULT_MODEL
-    
-    # Get model capabilities to determine how to handle classes
+
+    # ── 2. Validate model is registered ───────────────────────────────────────
     caps = get_model_capabilities(selected_model)
     if caps is None:
-        logger.warning("[frame %d] Unknown model '%s', falling back to %s", 
-                      frame.frame_id, selected_model, DEFAULT_MODEL)
+        logger.warning("[frame %d] Unknown model '%s', falling back to %s",
+                       frame.frame_id, selected_model, DEFAULT_MODEL)
         selected_model = DEFAULT_MODEL
         caps = get_model_capabilities(selected_model)
 
-    # Determine which classes to use based on model type
+    # ── 3. Build unified call args based on model_type ────────────────────────
     if caps.model_type == "open_vocab":
-        # Open vocabulary model: use prompt_classes (or legacy target_classes)
-        target_classes = frame.prompt_classes or frame.target_classes
-        if not target_classes:
-            target_classes = ["object"]  # Ultimate fallback for open vocab
-        # Clean and normalize
-        clean_classes: list[str] = []
-        for c in target_classes:
-            clean_classes.extend([x.strip().lower() for x in c.split(",") if x.strip()])
-        if not clean_classes:
-            clean_classes = ["object"]
-        selected_classes_filter: list[str] = []  # No filtering for open vocab
-    else:
-        # Closed set model: ignore prompt_classes, use selected_classes for filtering
-        clean_classes = []  # Not used for closed set
-        # Filter selected_classes to only those supported by the model
-        selected_classes_filter = filter_supported_classes(
-            selected_model, 
-            frame.selected_classes
-        )
+        # Open vocabulary: use prompt_classes (or legacy target_classes), no selected_classes
+        raw_prompts = frame.prompt_classes or frame.target_classes or []
+        prompt_classes: list[str] = []
+        for c in raw_prompts:
+            prompt_classes.extend(x.strip().lower() for x in c.split(",") if x.strip())
+        if not prompt_classes:
+            prompt_classes = ["object"]
+        selected_classes: list[str] = []
+
         logger.info(
-            "[frame %d] Model '%s' (closed_set): selected_classes=%s → filtered=%s",
-            frame.frame_id, selected_model, frame.selected_classes, selected_classes_filter
+            "[frame %d] open_vocab → model=%s prompt_classes=%s",
+            frame.frame_id, selected_model, prompt_classes
         )
 
-    logger.info(
-        "[frame %d] Inference request: model=%s (type=%s), prompt=%s, filter=%s",
-        frame.frame_id, selected_model, caps.model_type, clean_classes, selected_classes_filter
-    )
+    else:
+        # Closed set: ignore prompt_classes, use selected_classes for filtering
+        # The detector handles post-inference filtering internally.
+        prompt_classes = []
+        selected_classes = list(frame.selected_classes)
 
+        logger.info(
+            "[frame %d] closed_set → model=%s selected_classes=%s",
+            frame.frame_id, selected_model, selected_classes
+        )
+
+    # ── 4. Dispatch to unified detector interface ───────────────────────────────
     detections = []
     try:
-        model = get_model(selected_model)
-        
-        # For open_vocab models, pass clean_classes to infer()
-        # For closed_set models, pass empty list (filtering is done post-inference)
-        model_target_classes = clean_classes if caps.model_type == "open_vocab" else []
-        
-        detections = model.infer(frame.image_base64, model_target_classes)
-        
-        # Post-inference filtering for closed_set models
-        if caps.model_type == "closed_set" and selected_classes_filter:
-            original_count = len(detections)
-            filter_set = {c.lower() for c in selected_classes_filter}
-            detections = [
-                d for d in detections 
-                if d.class_name.lower() in filter_set
-            ]
-            logger.info(
-                "[frame %d] Closed-set filter: %d → %d detections",
-                frame.frame_id, original_count, len(detections)
-            )
+        # get_detector() returns PTDetector or ONNXDetector based on RUNTIME_CONFIG.
+        # inference.py has NO knowledge of the runtime type.
+        detector = get_detector(selected_model)
+        detections = detector.infer(
+            image_base64=frame.image_base64,
+            prompt_classes=prompt_classes,
+            selected_classes=selected_classes,
+        )
+        logger.info(
+            "[frame %d] %s → %d detection(s)",
+            frame.frame_id, selected_model, len(detections)
+        )
 
     except ValueError as exc:
         # Bad model name OR base64 decode failure

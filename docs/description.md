@@ -131,6 +131,52 @@
 
 ---
 
-## 5) 组件/原型说明（`SkylineDashboard.vue`）
+## 5) 性能分析页（`/performance`，`Performance.vue`）
+### 5.1 页面容器与布局
+- 根容器：`h-full bg-slate-950 flex flex-col overflow-hidden`，与 History.vue 结构一致。
+- 顶部标题区：`px-8 py-6 flex-shrink-0 border-b border-slate-800`，主标题 `text-lg font-semibold text-white`，子标题 `text-sm text-slate-500 mt-0.5`。
+
+### 5.2 Tab 切换
+- Tab 栏：`flex gap-1 p-1 bg-slate-900/80 rounded-lg border border-slate-800`
+- 激活态 Tab：`bg-slate-800 text-white rounded-md`
+- 非激活态 Tab：`text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 rounded-md`
+- 四个 Tab：总览、P-R 曲线、类别分析、测试报告
+
+### 5.3 总览 Tab（Overview）
+- 顶部指标卡网格：`grid grid-cols-4 gap-4`，每个卡片 `rounded-xl border border-slate-800 bg-slate-900/50 p-5`
+- 关键指标使用语义强调色：
+  - mAP@0.5：数字使用 `text-blue-400`，下方标签 `text-xs text-slate-500`
+  - Precision / Recall / FPS：分别使用 `text-emerald-400` / `text-purple-400` / `text-amber-400`
+  - 推理延迟：使用 `text-red-400`（数值越大越红）
+- 辅助指标（mAP@0.5:0.95、类别数、检测总数）：`text-slate-300`，次级标签 `text-xs text-slate-600`
+- 类别 AP 网格：每个类别卡片 `rounded-lg border border-slate-800 bg-slate-900/50 p-4`，左侧显示类别名称 `text-sm text-slate-300`，右侧 AP 值 `text-blue-400 text-lg font-semibold`
+
+### 5.4 P-R 曲线 Tab
+- 图表区：`rounded-xl border border-slate-800 bg-slate-900/50 p-6`
+- 类别选择器：`flex flex-wrap gap-2 mb-4`，每个类别为 pill 按钮 `px-3 py-1 rounded-full text-xs border`
+- P-R 曲线图当前为空占位 SVG，绑定 ECharts 实例但无实际数据渲染
+- AP 详情表格：`rounded-lg border border-slate-800 overflow-hidden`，表头 `bg-slate-900 text-xs font-medium text-slate-500 uppercase`
+
+### 5.5 类别分析 Tab
+- 四个子卡片区域，均使用 `rounded-xl border border-slate-800 bg-slate-900/50 p-6`：
+  - 置信度分布图（空 SVG 占位）
+  - 检测时间线（空 SVG 占位）
+  - 物体大小分布（空 SVG 占位）
+  - 空间热力图（空 SVG 占位）
+
+### 5.6 测试报告 Tab
+- 拖拽上传区：`rounded-xl border-2 border-dashed border-slate-700 hover:border-blue-500/50 bg-slate-900/50 p-8`，居中图标与文字
+- 已导入文件列表：`space-y-2`，每项 `rounded-lg border border-slate-800 bg-slate-900/50 p-3 flex items-center gap-3`
+- 测试报告表格结构同 AP 详情表
+
+### 5.7 当前状态（数据层）
+- **所有数据均为 Mock 硬编码**（lines 19-43），无真实 API 调用，无评测管道连接。
+- `performanceMetrics`、`classMetrics`、`testReports` 均为本地 `ref` 初始化，无 `fetch` / WebSocket 数据源。
+- 文件导入 `handleFiles()` 只有 TODO 注释，无实际实现。
+- GPU 利用率监控无代码采集。
+
+---
+
+## 6) 组件/原型说明（`SkylineDashboard.vue`）
 - 项目中仍包含一个 `SkylineDashboard.vue`，其样式使用 `scoped` 的“霓虹荧光（neon）+ Courier 字体风格”而非当前页面的 Tailwind 风格。
 - 当前路由页面主要由 `Detection.vue` 与 `History.vue` 构成；该文件可视为历史原型/备用实现，因此其样式体系与本页文档的 Tailwind 规范相互独立。

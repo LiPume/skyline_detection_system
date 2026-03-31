@@ -44,7 +44,7 @@ frontend/.env.local
 *.webp
 *.gif
 *.bmp
-
+*.csv
 # Database (runtime state)
 *.db
 *.sqlite
