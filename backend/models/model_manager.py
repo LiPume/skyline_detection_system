@@ -67,8 +67,12 @@ class DetectorResult:
 
     All timing values are in milliseconds (float).
 
-    session_ms / preprocess_ms / postprocess_ms are None when the detector
-    cannot expose granular timing (e.g. PT models). Frontend will display "--".
+    Timing sources:
+      ONNX: wall-clock timing via time.perf_counter() in _do_infer()
+      PT:   Ultralytics Results.speed dictionary (preprocess/inference/postprocess)
+
+    Timing fields are None only if the detector fails to return speed information,
+    or if the detector's _do_infer() explicitly returns None for that field.
     """
     detections:       list[Detection]
     session_ms:       float | None   # Pure model forward time. None if unavailable.
@@ -155,10 +159,11 @@ class BaseDetector(ABC):
         Timing attribution:
           preprocess_ms  — base64 decode (always) + runtime-specific input prep
                           (e.g. ONNX _preprocess(): resize/letterbox/normalize).
-                          NOTE: runtime-specific prep is added inside _do_infer().
-          session_ms     — purely the model forward pass. None if unavailable (PT).
+                          PT: Results.speed["preprocess"] + decode_ms.
+          session_ms     — purely the model forward pass.
+                          ONNX: session.run(). PT: Results.speed["inference"].
           postprocess_ms — runtime-specific output processing (e.g. ONNX NMS +
-                          coordinate transform) + optional class filtering.
+                          coordinate transform). PT: Results.speed["postprocess"].
                           NOTE: ONNX postprocess is fully handled inside
                           _do_infer(). Class filtering is added here if needed.
         """
@@ -223,11 +228,19 @@ class BaseDetector(ABC):
 
         Returns:
             (detections, preprocess_ms, session_ms, postprocess_ms)
-              preprocess_ms — runtime-specific input prep (e.g. ONNX resize/letterbox).
-                              None if unavailable.
-              session_ms    — pure model forward time. None if unavailable (PT).
-              postprocess_ms — runtime-specific output processing (NMS, coord transform).
-                              None if unavailable.
+
+            Timing sources:
+              ONNX:  wall-clock timing via time.perf_counter()
+                    - preprocess_ms: _preprocess() (resize/letterbox/normalize)
+                    - session_ms:    session.run() (pure model forward)
+                    - postprocess_ms: _postprocess() (NMS + coordinate transform)
+
+              PT:    Ultralytics Results.speed dictionary
+                    - preprocess_ms:  Results.speed["preprocess"]
+                    - session_ms:     Results.speed["inference"]
+                    - postprocess_ms: Results.speed["postprocess"]
+
+            Any field may be None if the detector cannot expose that timing granularity.
         """
         ...
 
@@ -324,30 +337,44 @@ class PTDetector(BaseDetector):
         clean_prompt_classes: list[str],
     ) -> tuple[list[Detection], float | None, float | None, float | None]:
         """
-        Runtime-specific inference.
+        Runtime-specific inference with Ultralytics native timing.
 
         Returns:
             (detections, preprocess_ms, session_ms, postprocess_ms)
-              All three timing values are None — ultralytics does not expose
-              internal layer timing granularity. Frontend will display "--".
+              All timing values sourced from Ultralytics Results.speed:
+                speed["preprocess"]  → preprocess_ms
+                speed["inference"]   → session_ms
+                speed["postprocess"] → postprocess_ms
         """
         self.load()
         model = self._model
 
         if self.model_type == "open_vocab":
-            detections = self._infer_open_vocab(model, img, clean_prompt_classes)
+            detections, speed = self._infer_open_vocab(model, img, clean_prompt_classes)
         else:
-            detections = self._infer_closed_set(model, img)
+            detections, speed = self._infer_closed_set(model, img)
 
-        return detections, None, None, None
+        if speed is not None:
+            preprocess_ms = speed.get("preprocess")
+            session_ms = speed.get("inference")
+            postprocess_ms = speed.get("postprocess")
+        else:
+            preprocess_ms, session_ms, postprocess_ms = None, None, None
+
+        return detections, preprocess_ms, session_ms, postprocess_ms
 
     def _infer_open_vocab(
         self,
         model: "YOLO_T",
         img: np.ndarray,
         clean_prompt_classes: list[str],
-    ) -> list[Detection]:
-        """YOLOWorld path: set_classes() then predict()."""
+    ) -> tuple[list[Detection], dict | None]:
+        """
+        YOLOWorld path: set_classes() then predict().
+
+        Returns:
+            (detections, speed_dict) where speed_dict is Results.speed or None.
+        """
         try:
             with self._infer_lock:
                 # set_classes() rebuilds text embeddings on CPU; re-pin to GPU after.
@@ -358,15 +385,22 @@ class PTDetector(BaseDetector):
             pass
 
         if results and results[0].boxes is not None:
-            return self._parse_boxes(results[0].boxes, results[0].names, img)
-        return []
+            detections = self._parse_boxes(results[0].boxes, results[0].names, img)
+            speed = getattr(results[0], "speed", None)
+            return detections, speed
+        return [], None
 
     def _infer_closed_set(
         self,
         model: "YOLO_T",
         img: np.ndarray,
-    ) -> list[Detection]:
-        """YOLOv8 path: predict all classes, let caller filter by selected_classes."""
+    ) -> tuple[list[Detection], dict | None]:
+        """
+        YOLOv8 path: predict all classes, let caller filter by selected_classes.
+
+        Returns:
+            (detections, speed_dict) where speed_dict is Results.speed or None.
+        """
         try:
             with self._infer_lock:
                 results = model.predict(img, verbose=False, conf=self.conf_threshold, device=self._device)
@@ -374,8 +408,10 @@ class PTDetector(BaseDetector):
             pass
 
         if results and results[0].boxes is not None:
-            return self._parse_boxes(results[0].boxes, results[0].names, img)
-        return []
+            detections = self._parse_boxes(results[0].boxes, results[0].names, img)
+            speed = getattr(results[0], "speed", None)
+            return detections, speed
+        return [], None
 
 
 # ── Concrete PT subclasses ────────────────────────────────────────────────────

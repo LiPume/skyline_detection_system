@@ -84,11 +84,32 @@ export interface InferenceResult {
    *   当前后端 inference_time_ms 包含 detector 加载等开销。
    */
   inference_time_ms: number
-  /** 纯模型 forward 耗时（不含预处理/后处理）。ONNX: session.run(); PT: predict()（PT不暴露内部计时，为0.0）。 */
+  /**
+   * 纯模型 forward 耗时（不含预处理/后处理）。
+   *
+   * 来源：
+   *   - ONNX: session.run() wall-clock 计时
+   *   - PT: Ultralytics Results.speed["inference"]
+   *
+   * 注意：这是前端"纯推理耗时 / 纯推理 FPS"的直接来源，
+   *       与 inference_time_ms 是不同概念。
+   */
   session_ms: number
-  /** 预处理耗时：base64 decode + resize + normalize。 */
+  /**
+   * 预处理耗时：base64 decode + resize + normalize。
+   *
+   * 来源：
+   *   - ONNX: decode_ms + _preprocess()
+   *   - PT: Ultralytics Results.speed["preprocess"] + decode_ms
+   */
   preprocess_ms: number
-  /** 后处理耗时：NMS + 坐标变换 + 类别过滤。 */
+  /**
+   * 后处理耗时：NMS + 坐标变换 + 类别过滤。
+   *
+   * 来源：
+   *   - ONNX: _postprocess()
+   *   - PT: Ultralytics Results.speed["postprocess"]
+   */
   postprocess_ms: number
   detections: Detection[]
 }

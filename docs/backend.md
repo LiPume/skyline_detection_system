@@ -1,7 +1,7 @@
 # Skyline 后端架构文档
 
 > 本文档面向大型语言模型（LLM）和新开发者，完整描述 Skyline 后端的设计哲学、模块划分和交互流程。
-> 代码版本对应 2026-03-31，包含 ONNX CUDA 加速链路和 LIFO 调度器。
+> 代码版本对应 2026-04-01，包含 ONNX CUDA 加速链路、LIFO 调度器、PT/ONNX 统一 timing 协议。
 
 ---
 
@@ -60,7 +60,10 @@ InferenceResult
 ├── message_type: "inference_result"
 ├── frame_id: int
 ├── timestamp: float
-├── inference_time_ms: float  # 端到端耗时
+├── inference_time_ms: float  # 后端单帧总处理耗时（_blocking_inference 整体）
+├── session_ms: float|null    # 纯模型 forward 耗时（ONNX: session.run / PT: Results.speed）
+├── preprocess_ms: float|null # 预处理耗时（ONNX: _preprocess / PT: Results.speed）
+├── postprocess_ms: float|null # 后处理耗时（ONNX: _postprocess / PT: Results.speed）
 └── detections: list[Detection]
 
 Detection
@@ -68,6 +71,8 @@ Detection
 ├── confidence: float
 └── bbox: (x, y, w, h)         # 原始图像坐标系
 ```
+
+> **注意**：`inference_time_ms` 与 `session_ms` 是不同概念。前者是后端总耗时，后者是纯推理耗时。
 
 ---
 
@@ -284,9 +289,112 @@ self._session = ort.InferenceSession(path, sess_opts, providers=[...])
 
 ---
 
-## 7. 日志解读指南
+## 7. Timing 口径专题（Phase 5）
 
-### 7.1 模型加载阶段（仅首次推理时打印一次）
+### 7.1 后端 timing 字段总览
+
+后端对前端返回以下四个 timing 字段：
+
+|| 字段名 | 必须返回 | 说明 |
+||--------|---------|------|
+|| `inference_time_ms` | ✅ 始终返回 | `_blocking_inference()` 整体耗时 |
+|| `preprocess_ms` | ⚠️ 可为 null | 预处理耗时 |
+|| `session_ms` | ⚠️ 可为 null | 纯模型 forward 耗时 |
+|| `postprocess_ms` | ⚠️ 可为 null | 后处理耗时 |
+
+### 7.2 四个字段的严格语义
+
+#### `inference_time_ms`
+
+**语义**：`_blocking_inference()` 从入口到返回的总耗时。
+
+**包含**：
+- detector 获取（已缓存时极快，首次获取时有额外开销）
+- `detector.infer()` 整体（含 decode + preprocess + session + postprocess）
+- `InferenceResult` 结果对象构造
+- Python 函数调用开销
+
+**不包含**：
+- 帧在队列中的等待时间（LIFO 调度器丢弃旧帧）
+
+**与 `session_ms` 的区别**：`inference_time_ms` 是"后端总耗时"，不是"纯推理耗时"。
+
+#### `preprocess_ms`
+
+**语义**：输入准备阶段耗时。
+
+| Runtime | 来源 |
+|---------|------|
+| ONNX | `decode_ms + _preprocess()` (resize/letterbox/normalize) |
+| PT | `decode_ms + Results.speed["preprocess"]` |
+
+#### `session_ms`
+
+**语义**：纯模型执行阶段耗时。
+
+| Runtime | 来源 |
+|---------|------|
+| ONNX | `session.run()` wall-clock 计时 |
+| PT | `Ultralytics Results.speed["inference"]` |
+
+> **重要**：`session_ms` 是前端"纯推理耗时 / 纯推理 FPS"的直接来源。
+
+#### `postprocess_ms`
+
+**语义**：输出后处理阶段耗时。
+
+| Runtime | 来源 |
+|---------|------|
+| ONNX | `_postprocess()` (NMS + 坐标变换 + 阈值过滤) |
+| PT | `Ultralytics Results.speed["postprocess"]` |
+
+### 7.3 ONNX 与 PT 路径的统一协议
+
+**设计原则**：前端协议统一，高于内部 runtime 实现统一。
+
+两条路径向前端暴露的字段完全一致：
+
+```
+前端收到：{ inference_time_ms, session_ms, preprocess_ms, postprocess_ms }
+```
+
+**内部实现差异**（前端无感知）：
+
+| 阶段 | ONNX 实现 | PT 实现 |
+|------|-----------|---------|
+| 计时方式 | wall-clock `time.perf_counter()` | Ultralytics `Results.speed` |
+| `preprocess_ms` | `_preprocess()` 计时 | `Results.speed["preprocess"]` |
+| `session_ms` | `session.run()` 计时 | `Results.speed["inference"]` |
+| `postprocess_ms` | `_postprocess()` 计时 | `Results.speed["postprocess"]` |
+
+### 7.4 算法全流程与后端总耗时的区别
+
+```
+算法全流程耗时 = preprocess_ms + session_ms + postprocess_ms
+后端总耗时     = inference_time_ms
+```
+
+二者不一定严格相等，因为 `inference_time_ms` 还可能额外包含：
+- detector 获取开销（已缓存时极小）
+- schema / `DetectorResult` / `InferenceResult` 对象构造
+- Python 函数调用栈开销
+
+### 7.5 哪些后端字段必须长期保留
+
+以下字段属于前后端统一协议核心字段，**后续不能随意删除**：
+
+| 字段 | 原因 |
+|------|------|
+| `inference_time_ms` | 支撑"后端处理耗时 / FPS" |
+| `session_ms` | 支撑"纯推理耗时 / FPS"（比赛硬指标） |
+| `preprocess_ms` | 支撑"算法全流程耗时"计算 |
+| `postprocess_ms` | 支撑"算法全流程耗时"计算 |
+
+---
+
+## 8. 日志解读指南
+
+### 8.1 模型加载阶段
 
 **正常（CUDA 激活）**：
 ```
@@ -318,7 +426,7 @@ self._session = ort.InferenceSession(path, sess_opts, providers=[...])
 [ONNXDetector] onnx timing | preprocess=3.5 ms | session=680.0 ms | postprocess=4.8 ms | detections=5
 ```
 
-### 7.2 判断问题根因
+### 8.2 判断问题根因
 
 | 日志现象 | 根因 | 解决方向 |
 |---------|------|---------|
@@ -329,7 +437,7 @@ self._session = ort.InferenceSession(path, sess_opts, providers=[...])
 
 ---
 
-## 8. 扩展指南
+## 9. 扩展指南
 
 ### 新增 PT 模型
 
@@ -353,7 +461,7 @@ self._session = ort.InferenceSession(path, sess_opts, providers=[...])
 
 ---
 
-## 9. 关键配置位置
+## 10. 关键配置位置
 
 | 配置项 | 位置 |
 |--------|------|

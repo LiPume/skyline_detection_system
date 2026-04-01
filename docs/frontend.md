@@ -352,3 +352,99 @@
 - `saveDetection()`：保存检测结果
 - `getVideoUrl(id)`：获取视频下载 URL
 - `getDataUrl(id)`：获取 JSON 数据 URL
+
+---
+
+## 9) 性能指标体系（Phase 5）
+
+### 9.1 前端性能指标展示总览
+
+前端右侧性能区分为三类：
+
+| 层级 | 分类 | 展示性质 | 示例 |
+|------|------|----------|------|
+| 第1层 | 主展示指标 | 正式展示，比赛/答辩必须保留 | 后端处理耗时、纯推理耗时 |
+| 第2层 | 工程 / 实时指标 | 正式展示，系统实时展示建议保留 | 发送节奏、结果返回节奏 |
+| 第3层 | 链路诊断指标 | 调试辅助，开发/排查阶段保留 | 前端编码耗时、链路额外开销 |
+
+### 9.2 前端当前使用的统一字段协议
+
+#### WebSocket 接收字段（后端 → 前端）
+
+| 字段名 | 类型 | 说明 |
+|--------|------|------|
+| `inference_time_ms` | `number` | 后端单帧总处理耗时（_blocking_inference 整体） |
+| `session_ms` | `number` | 纯模型 forward 耗时（ONNX: session.run / PT: Results.speed["inference"]） |
+| `preprocess_ms` | `number` | 预处理耗时（ONNX: _preprocess / PT: Results.speed["preprocess"]） |
+| `postprocess_ms` | `number` | 后处理耗时（ONNX: _postprocess / PT: Results.speed["postprocess"]） |
+
+#### 前端派生字段
+
+| 字段名 | 类型 | 计算公式 | 说明 |
+|--------|------|----------|------|
+| `backendProcessMs` | `ref<number\|null>` | `= inference_time_ms` | 后端处理耗时（直接赋值） |
+| `sessionMs` | `ref<number\|null>` | `= session_ms` | 纯推理耗时（直接赋值） |
+| `preprocessMs` | `ref<number\|null>` | `= preprocess_ms` | 预处理耗时（直接赋值） |
+| `postprocessMs` | `ref<number\|null>` | `= postprocess_ms` | 后处理耗时（直接赋值） |
+| `algoProcessMs` | `computed<number\|null>` | `preprocessMs + sessionMs + postprocessMs` | 算法全流程耗时（三段之和） |
+| `fpsBackend` | `computed<number\|null>` | `1000 / backendProcessMs` | 后端处理 FPS |
+| `fpsInfer` | `computed<number\|null>` | `1000 / sessionMs` | 纯推理 FPS |
+| `fpsAlgo` | `computed<number\|null>` | `1000 / algoProcessMs` | 算法全流程 FPS |
+| `frontendSendIntervalMs` | `ref<number\|null>` | 相邻两次 send 间隔 | 发送节奏 |
+| `fpsSend` | `computed<number\|null>` | `1000 / frontendSendIntervalMs` | 发送节奏 FPS |
+| `resultIntervalMs` | `ref<number\|null>` | 相邻两次 inference_result 到达间隔 | 结果返回节奏 |
+| `fpsResult` | `computed<number\|null>` | `1000 / resultIntervalMs` | 结果返回 FPS |
+| `endToEndLatencyMs` | `ref<number\|null>` | `(Date.now() / 1000 - timestamp) * 1000` | 端到端延迟 |
+| `frontendEncodeMs` | `ref<number\|null>` | CanvasEncoder 回调传入 | 前端编码耗时 |
+| `frontendRenderMs` | `ref<number\|null>` | `performance.now() - resultNow` | 前端消息处理耗时 |
+| `pipelineExtraMs` | `computed<number\|null>` | `endToEndLatencyMs - backendProcessMs` | 链路额外开销 |
+
+### 9.3 前端展示指标定义
+
+#### 正式指标：必须长期保留
+
+以下指标直接支撑比赛、工程、实时三类指标体系，**禁止删除或隐藏**：
+
+##### 比赛硬指标（Phase 5 核心）
+
+| 指标名称 | 来源 | 计算公式 | 用途 |
+|----------|------|----------|------|
+| **纯推理耗时** | `session_ms` | `sessionMs` | 比赛硬指标口径 |
+| **纯推理 FPS** | `session_ms` | `1000 / sessionMs` | 比赛硬指标口径 |
+| **算法全流程耗时** | 三段之和 | `preprocessMs + sessionMs + postprocessMs` | 比赛参考口径 |
+| **算法全流程 FPS** | 三段之和 | `1000 / (preprocessMs + sessionMs + postprocessMs)` | 比赛参考口径 |
+
+##### 工程与系统指标
+
+| 指标名称 | 来源 | 计算公式 | 用途 |
+|----------|------|----------|------|
+| **后端处理耗时** | `inference_time_ms` | `backendProcessMs` | 后端整帧处理能力 |
+| **后端处理 FPS** | `inference_time_ms` | `1000 / inference_time_ms` | 后端吞吐量 |
+| **端到端延迟** | websocket timestamp | `(Date.now() / 1000 - timestamp) * 1000` | 系统实时性 |
+| **发送节奏** | 前端测速 | 相邻两次 send 间隔 | 前端发送稳定性 |
+| **发送节奏 FPS** | 前端测速 | `1000 / frontendSendIntervalMs` | 前端发送速率 |
+| **结果返回节奏** | 前端测速 | 相邻两次 inference_result 到达间隔 | 后端响应稳定性 |
+| **结果返回 FPS** | 前端测速 | `1000 / resultIntervalMs` | 后端响应速率 |
+
+#### 调试指标：后续可隐藏/删除
+
+以下指标属于调试辅助，**建议在正式展示时隐藏或降级**：
+
+| 指标名称 | 来源 | 定位 | 建议处理 |
+|----------|------|------|----------|
+| **前端编码耗时** (`frontendEncodeMs`) | CanvasEncoder 回调 | 前端 canvas → base64 编码耗时 | 开发阶段保留，正式页面可折叠或隐藏 |
+| **前端消息处理** (`frontendRenderMs`) | `performance.now()` 差值 | 前端收到 ws 消息到写入 state 的耗时 | 开发阶段保留，正式页面可折叠或隐藏 |
+| **链路额外开销** (`pipelineExtraMs`) | `endToEndLatencyMs - backendProcessMs` | 端到端 - 后端耗时 | **严禁对外表述为"纯网络延迟"**。包含队列等待、网络传输、前端处理等 |
+
+### 9.4 文案口径警告
+
+以下混淆**必须避免**：
+
+| 混淆 | 正确口径 |
+|------|----------|
+| `inference_time_ms` = 纯推理耗时 | `inference_time_ms` = 后端总耗时，`session_ms` = 纯推理耗时 |
+| `backendProcessMs` = `sessionMs` | `backendProcessMs` 来源于 `inference_time_ms`，`sessionMs` 来源于 `session_ms` |
+| `fpsBackend` = `fpsInfer` | `fpsBackend = 1000 / inference_time_ms`，`fpsInfer = 1000 / session_ms` |
+| `endToEndLatencyMs` = 取帧到渲染完成 | `endToEndLatencyMs = t(收到结果) - t(发送帧)`，不含前端渲染 |
+| `frontendRenderMs` = 浏览器真实渲染耗时 | 仅是 ws 消息到 state 写入的差值，不含 DOM 渲染 |
+| `pipelineExtraMs` = 纯网络延迟 | 包含队列等待 + 网络传输 + 前端处理，不能简化为"网络延迟" |
