@@ -25,7 +25,7 @@ from typing import Callable, Coroutine, Optional
 from starlette.concurrency import run_in_threadpool
 
 from core.models import InferenceResult, VideoFrame
-from models.model_manager import get_detector
+from models.model_manager import DetectorResult, get_detector
 from models.registry import get_model_capabilities
 
 logger = logging.getLogger(__name__)
@@ -91,19 +91,23 @@ def _blocking_inference(frame: VideoFrame) -> InferenceResult:
         )
 
     # ── 4. Dispatch to unified detector interface ───────────────────────────────
-    detections = []
+    detector_result = None  # type: ignore
+
     try:
         # get_detector() returns PTDetector or ONNXDetector based on RUNTIME_CONFIG.
         # inference.py has NO knowledge of the runtime type.
         detector = get_detector(selected_model)
-        detections = detector.infer(
+
+        # detector.infer() returns DetectorResult(detections, session_ms, preprocess_ms, postprocess_ms)
+        detector_result = detector.infer(
             image_base64=frame.image_base64,
             prompt_classes=prompt_classes,
             selected_classes=selected_classes,
         )
+
         logger.info(
             "[frame %d] %s → %d detection(s)",
-            frame.frame_id, selected_model, len(detections)
+            frame.frame_id, selected_model, len(detector_result.detections)
         )
 
     except ValueError as exc:
@@ -126,12 +130,20 @@ def _blocking_inference(frame: VideoFrame) -> InferenceResult:
             frame.frame_id, type(exc).__name__, exc,
         )
 
+    # Default to empty result if detector failed
+    if detector_result is None:
+        detector_result = DetectorResult(detections=[], session_ms=None, preprocess_ms=None, postprocess_ms=None)
+
     elapsed_ms = (_time.perf_counter() - t0) * 1000
+
     return InferenceResult(
         frame_id=frame.frame_id,
         timestamp=frame.timestamp,
         inference_time_ms=round(elapsed_ms, 3),
-        detections=detections,
+        session_ms=round(detector_result.session_ms, 3),
+        preprocess_ms=round(detector_result.preprocess_ms, 3),
+        postprocess_ms=round(detector_result.postprocess_ms, 3),
+        detections=detector_result.detections,
     )
 
 

@@ -41,8 +41,10 @@ from __future__ import annotations
 import base64
 import logging
 import threading
+import time as _time
 from abc import ABC, abstractmethod
 from pathlib import Path
+from dataclasses import dataclass
 from typing import ClassVar, Optional
 
 import cv2
@@ -51,6 +53,27 @@ import numpy as np
 from core.models import Detection
 
 logger = logging.getLogger(__name__)
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+#  DetectorResult — structured return from BaseDetector.infer()
+# ════════════════════════════════════════════════════════════════════════════════
+
+@dataclass
+class DetectorResult:
+    """
+    Structured result from BaseDetector.infer(), carrying detections and
+    fine-grained timing data.
+
+    All timing values are in milliseconds (float).
+
+    session_ms / preprocess_ms / postprocess_ms are None when the detector
+    cannot expose granular timing (e.g. PT models). Frontend will display "--".
+    """
+    detections:       list[Detection]
+    session_ms:       float | None   # Pure model forward time. None if unavailable.
+    preprocess_ms:    float | None   # Input preprocessing. None if unavailable.
+    postprocess_ms:   float | None   # Output postprocessing. None if unavailable.
 
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -114,7 +137,7 @@ class BaseDetector(ABC):
         image_base64: str,
         prompt_classes: list[str],
         selected_classes: list[str],
-    ) -> list[Detection]:
+    ) -> DetectorResult:
         """
         Unified inference entry for all runtime backends.
 
@@ -126,30 +149,61 @@ class BaseDetector(ABC):
                               Ignored for open_vocab models.
 
         Returns:
-            List of Detection(class_name, confidence, bbox=[x,y,w,h]).
-        """
-        # ── Step 1: Decode image (shared) ────────────────────────────────────
-        img = decode_base64_image(image_base64)
+            DetectorResult with detections and fine-grained timing.
+            Timing values are in milliseconds; None means unavailable.
 
-        # ── Step 2: Clean prompt classes (open_vocab only) ──────────────────
+        Timing attribution:
+          preprocess_ms  — base64 decode (always) + runtime-specific input prep
+                          (e.g. ONNX _preprocess(): resize/letterbox/normalize).
+                          NOTE: runtime-specific prep is added inside _do_infer().
+          session_ms     — purely the model forward pass. None if unavailable (PT).
+          postprocess_ms — runtime-specific output processing (e.g. ONNX NMS +
+                          coordinate transform) + optional class filtering.
+                          NOTE: ONNX postprocess is fully handled inside
+                          _do_infer(). Class filtering is added here if needed.
+        """
+        # ── Step 1: Decode image (base64) — always attributed to preprocess_ms ──
+        t_decode_start = _time.perf_counter()
+        img = decode_base64_image(image_base64)
+        decode_ms = (_time.perf_counter() - t_decode_start) * 1000
+
+        # ── Step 2: Clean prompt classes (open_vocab only) — no timing cost ──────
         if self.model_type == "open_vocab":
             clean_prompts = self._clean_prompt_classes(prompt_classes)
         else:
             clean_prompts = []
 
-        # ── Step 3: Runtime-specific inference ───────────────────────────────
-        detections = self._do_infer(img, clean_prompts)
+        # ── Step 3: Runtime-specific inference (timing done inside) ─────────────
+        # Returns (detections, preprocess_ms_without_decode, session_ms, postprocess_ms)
+        detections, rt_preprocess_ms, session_ms, postprocess_ms = self._do_infer(
+            img, clean_prompts
+        )
 
-        # ── Step 4: Post-inference class filtering (closed_set only) ─────────
+        # Combine base64 decode into preprocess_ms
+        if rt_preprocess_ms is not None:
+            preprocess_ms = decode_ms + rt_preprocess_ms
+        else:
+            preprocess_ms = None
+
+        # ── Step 4: Post-inference class filtering (closed_set only) ─────────────
         if self.model_type == "closed_set" and selected_classes:
             filter_set = {c.lower() for c in selected_classes}
             detections = [
                 d for d in detections
                 if d.class_name.lower() in filter_set
             ]
+        # NOTE: class filtering cost is negligible (< 0.01 ms) and is NOT
+        # added to postprocess_ms to keep the metric comparable across runtimes.
 
+        # ── Step 5: Cleanup ─────────────────────────────────────────────────
         del img
-        return detections
+
+        return DetectorResult(
+            detections=detections,
+            session_ms=session_ms,
+            preprocess_ms=preprocess_ms,
+            postprocess_ms=postprocess_ms,
+        )
 
     # ── Abstract methods (subclass implements) ───────────────────────────────
 
@@ -158,7 +212,7 @@ class BaseDetector(ABC):
         self,
         img: np.ndarray,
         clean_prompt_classes: list[str],
-    ) -> list[Detection]:
+    ) -> tuple[list[Detection], float | None, float | None, float | None]:
         """
         Runtime-specific inference. Called after image decode and prompt cleaning.
 
@@ -168,7 +222,12 @@ class BaseDetector(ABC):
                                   empty list for closed_set).
 
         Returns:
-            List of Detection objects before class filtering.
+            (detections, preprocess_ms, session_ms, postprocess_ms)
+              preprocess_ms — runtime-specific input prep (e.g. ONNX resize/letterbox).
+                              None if unavailable.
+              session_ms    — pure model forward time. None if unavailable (PT).
+              postprocess_ms — runtime-specific output processing (NMS, coord transform).
+                              None if unavailable.
         """
         ...
 
@@ -263,14 +322,24 @@ class PTDetector(BaseDetector):
         self,
         img: np.ndarray,
         clean_prompt_classes: list[str],
-    ) -> list[Detection]:
+    ) -> tuple[list[Detection], float | None, float | None, float | None]:
+        """
+        Runtime-specific inference.
+
+        Returns:
+            (detections, preprocess_ms, session_ms, postprocess_ms)
+              All three timing values are None — ultralytics does not expose
+              internal layer timing granularity. Frontend will display "--".
+        """
         self.load()
         model = self._model
 
         if self.model_type == "open_vocab":
-            return self._infer_open_vocab(model, img, clean_prompt_classes)
+            detections = self._infer_open_vocab(model, img, clean_prompt_classes)
         else:
-            return self._infer_closed_set(model, img)
+            detections = self._infer_closed_set(model, img)
+
+        return detections, None, None, None
 
     def _infer_open_vocab(
         self,
@@ -586,17 +655,15 @@ class ONNXDetector(BaseDetector):
         self,
         img: np.ndarray,
         clean_prompt_classes: list[str],
-    ) -> list[Detection]:
+    ) -> tuple[list[Detection], float | None, float | None, float | None]:
         """
         ONNX inference with YOLOv8 post-processing.
 
-        Expected output format (ultralytics v8 ONNX export):
-          output shape = [1, 84, 8400]
-            84 = 4 (x,y,w,h) + 80 (class scores)
-          Transposed to [8400, 84], then:
-            • xywh  = first 4 columns
-            • conf  = max of class columns
-            • cls   = argmax of class columns
+        Timing attribution:
+          preprocess_ms  — _preprocess(): resize + letterbox + BGR→RGB + CHW transpose + normalize.
+                           NOTE: base64 decode is added in BaseDetector.infer().
+          session_ms     — purely session.run() (pure model forward).
+          postprocess_ms — _postprocess(): NMS + coordinate transform + threshold filter.
         """
         import time as _time
 
@@ -604,14 +671,15 @@ class ONNXDetector(BaseDetector):
 
         if self._session is None:
             logger.warning("[ONNXDetector] No session loaded for %s", self._model_id)
-            return []
+            return [], None, None, None
 
-        # ── Preprocessing ───────────────────────────────────────────────────────
-        t0 = _time.perf_counter()
+        # ── preprocess_ms: _preprocess() — resize + letterbox + normalize ────────
+        t_pre_start = _time.perf_counter()
         input_tensor = self._preprocess(img)
-        t1 = _time.perf_counter()
+        preprocess_ms = (_time.perf_counter() - t_pre_start) * 1000
 
-        # ── Run inference ────────────────────────────────────────────────────────
+        # ── session_ms: pure model forward ───────────────────────────────────────
+        t_session_start = _time.perf_counter()
         try:
             outputs = self._session.run(
                 [self._output_name],
@@ -619,22 +687,16 @@ class ONNXDetector(BaseDetector):
             )
         except Exception as exc:
             logger.error("[ONNXDetector] Inference failed for %s: %s", self._model_id, exc)
-            return []
-        t2 = _time.perf_counter()
+            return [], preprocess_ms, None, None
+        session_ms = (_time.perf_counter() - t_session_start) * 1000
 
-        # ── Post-processing ──────────────────────────────────────────────────────
-        raw = outputs[0]   # shape: [1, 84, 8400] or similar
+        # ── postprocess_ms: NMS + coordinate transform ──────────────────────────
+        t_post_start = _time.perf_counter()
+        raw = outputs[0]
         detections = self._postprocess(raw, img)
-        t3 = _time.perf_counter()
+        postprocess_ms = (_time.perf_counter() - t_post_start) * 1000
 
-        logger.info(
-            "[ONNXDetector] onnx timing | preprocess=%.1f ms | session=%.1f ms | postprocess=%.1f ms | detections=%d",
-            (t1 - t0) * 1000,
-            (t2 - t1) * 1000,
-            (t3 - t2) * 1000,
-            len(detections),
-        )
-        return detections
+        return detections, preprocess_ms, session_ms, postprocess_ms
 
     @staticmethod
     def _nms(

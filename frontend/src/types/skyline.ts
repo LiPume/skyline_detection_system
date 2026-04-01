@@ -73,8 +73,23 @@ export interface Detection {
 export interface InferenceResult {
   message_type: 'inference_result'
   frame_id: number
-  timestamp: number          // echoed back from client — used for latency calc
-  inference_time_ms: number  // pure model inference duration on backend
+  timestamp: number          // echoed back from client — used for E2E latency calc
+  /**
+   * 后端单帧总处理耗时（不含网络传输）。
+   * 口径：_blocking_inference() 从入口到返回的完整耗时。
+   * 包含 get_detector() + detector.infer() + 结果构造，不含帧在队列中的等待时间。
+   *
+   * ⚠️ 注意：这 **不是** 纯模型推理时间（session_ms）。
+   *   纯推理时间需要后端单独暴露 detector.infer() 内的计时，
+   *   当前后端 inference_time_ms 包含 detector 加载等开销。
+   */
+  inference_time_ms: number
+  /** 纯模型 forward 耗时（不含预处理/后处理）。ONNX: session.run(); PT: predict()（PT不暴露内部计时，为0.0）。 */
+  session_ms: number
+  /** 预处理耗时：base64 decode + resize + normalize。 */
+  preprocess_ms: number
+  /** 后处理耗时：NMS + 坐标变换 + 类别过滤。 */
+  postprocess_ms: number
   detections: Detection[]
 }
 

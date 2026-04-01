@@ -38,9 +38,63 @@ function showToast(text: string, type: Toast['type'] = 'error', ms = 4000) {
 }
 
 // ── Telemetry ──────────────────────────────────────────────────────────────────
-const systemLatency     = ref(0)
-const inferenceTime     = ref(0)
-const inferenceFps       = ref(0)   // 实际推理FPS：1000 / inference_time_ms
+const backendProcessMs    = ref<number | null>(null)   // 后端全流程耗时（不含网络）
+const inferenceFps        = ref(0)   // 后端处理 FPS：1000 / backendProcessMs（兼容旧名）
+
+// ── Phase 5: 比赛硬指标（session_ms 口径——后端当前未实现，显示 --）──────────
+const sessionMs           = ref<number | null>(null)   // 纯模型 forward 耗时（后端未提供）
+const fpsInfer             = computed(() => {
+  if (sessionMs.value === null || sessionMs.value <= 0) return null
+  return 1000 / sessionMs.value
+})
+
+// ── Phase 5: 工程指标 ──────────────────────────────────────────────────────────
+const preprocessMs         = ref<number | null>(null)   // 预处理耗时（后端未提供）
+const postprocessMs        = ref<number | null>(null)   // 后处理耗时（后端未提供）
+const algoProcessMs        = computed<number | null>(() => {
+  // 仅当三个子阶段全部可用时才能计算
+  if (preprocessMs.value === null || sessionMs.value === null || postprocessMs.value === null) return null
+  return preprocessMs.value + sessionMs.value + postprocessMs.value
+})
+const fpsAlgo              = computed<number | null>(() => {
+  if (algoProcessMs.value === null || algoProcessMs.value <= 0) return null
+  return 1000 / algoProcessMs.value
+})
+const fpsBackend           = computed<number | null>(() => {
+  if (backendProcessMs.value === null || backendProcessMs.value <= 0) return null
+  return 1000 / backendProcessMs.value
+})
+
+// ── Phase 5: 系统实时指标 ──────────────────────────────────────────────────────
+const frontendSendIntervalMs = ref<number | null>(null) // 前端发送节奏（ms）
+const fpsSend               = computed<number | null>(() => {
+  if (frontendSendIntervalMs.value === null || frontendSendIntervalMs.value <= 0) return null
+  return 1000 / frontendSendIntervalMs.value
+})
+const resultIntervalMs       = ref<number | null>(null) // 结果返回节奏（ms）
+const fpsResult               = computed<number | null>(() => {
+  if (resultIntervalMs.value === null || resultIntervalMs.value <= 0) return null
+  return 1000 / resultIntervalMs.value
+})
+const endToEndLatencyMs       = ref<number | null>(null) // 端到端延迟（ms）
+
+// ── Phase 5: 调试指标 ─────────────────────────────────────────────────────────
+const frontendEncodeMs     = ref<number | null>(null)    // 前端编码耗时
+const frontendRenderMs     = ref<number | null>(null)    // 前端消息处理
+const pipelineExtraMs      = computed<number | null>(() => {
+  if (endToEndLatencyMs.value === null || backendProcessMs.value === null) return null
+  return Math.max(0, endToEndLatencyMs.value - backendProcessMs.value)
+})
+let lastSendAt    = 0  // 上次发送时间戳
+let lastResultAt  = 0  // 上次收到结果时间戳
+
+// ── 格式化辅助 ───────────────────────────────────────────────────────────────
+function fmt(v: number | null, decimals = 1): string {
+  if (v === null || !isFinite(v)) return '--'
+  return v.toFixed(decimals)
+}
+
+// ── Detection state & drag ─────────────────────────────────────────────────────
 const currentDetections = ref<Detection[]>([])
 const isDragging        = ref(false)
 
@@ -133,18 +187,38 @@ const QUICK_CHIPS_LOCAL = [
 const { status: wsStatus, connect, disconnect, send } = useWebSocket({
   onMessage(msg: ServerMessage) {
     if (msg.message_type === 'inference_result') {
+      // ── Phase 5: 收到推理结果，计算结果返回节奏 ─────────────────────────
+      const resultNow = performance.now()
+      if (lastResultAt > 0) {
+        resultIntervalMs.value = resultNow - lastResultAt
+      }
+      lastResultAt = resultNow
+
       const r = msg as InferenceResult
-      systemLatency.value     = Math.round((Date.now() / 1000 - r.timestamp) * 1000)
-      inferenceTime.value     = Math.round(r.inference_time_ms)
-      // 计算实际推理FPS：1000ms / 单帧推理时间ms
-      inferenceFps.value      = r.inference_time_ms > 0 ? Math.round(1000 / r.inference_time_ms * 10) / 10 : 0
+
+      // ── 工程指标 ────────────────────────────────────────────────────────
+      backendProcessMs.value  = r.inference_time_ms
+      inferenceFps.value      = r.inference_time_ms > 0
+        ? Math.round(1000 / r.inference_time_ms * 10) / 10 : 0
+
+      // ── 比赛硬指标（Phase 5: 后端已实现，直接读取）──────────────────────
+      sessionMs.value     = r.session_ms ?? null
+      preprocessMs.value  = r.preprocess_ms ?? null
+      postprocessMs.value = r.postprocess_ms ?? null
+
+      // ── 系统实时指标 ────────────────────────────────────────────────────
+      endToEndLatencyMs.value = (Date.now() / 1000 - r.timestamp) * 1000
+
+      // ── 检测结果写入 ────────────────────────────────────────────────────
       currentDetections.value = r.detections
-      // Update peak detection count for this frame
       updateMaxDetections(r.detections.length)
-      // Accumulate per-frame class counts
       for (const d of r.detections) {
         classCounts.value[d.class_name] = (classCounts.value[d.class_name] ?? 0) + 1
       }
+
+      // ── 调试指标：前端消息处理耗时 ─────────────────────────────────────
+      frontendRenderMs.value = performance.now() - resultNow
+
     } else if (msg.message_type === 'error') {
       showToast(msg.detail, 'error')
     }
@@ -164,11 +238,18 @@ const selectedClassesArray = computed<string[]>(() => Array.from(selectedClasses
 const { sourceType, isPlaying, hasVideo, loadFile, selectWebcam, startPush, stopPush } =
   useVideoStream({
     videoEl,
-    systemLatency,
+    systemLatency: endToEndLatencyMs,
     modelId: selectedModelId,
     promptClasses: targetClasses,
     selectedClasses: selectedClassesArray,
+    // ── Phase 5: 发送节奏测速 ───────────────────────────────────────────────
     onFrame({ frame_id, timestamp, image_base64, model_id, prompt_classes, selected_classes }) {
+      const sendNow = performance.now()
+      if (lastSendAt > 0) {
+        frontendSendIntervalMs.value = sendNow - lastSendAt
+      }
+      lastSendAt = sendNow
+
       send(JSON.stringify({
         message_type:   'video_frame',
         frame_id,
@@ -181,6 +262,10 @@ const { sourceType, isPlaying, hasVideo, loadFile, selectWebcam, startPush, stop
         selected_model: model_id,
         target_classes: prompt_classes,
       }))
+    },
+    // ── Phase 5: 编码耗时测速 ──────────────────────────────────────────────
+    onEncode(encodeMs) {
+      frontendEncodeMs.value = encodeMs
     },
   })
 
@@ -381,7 +466,7 @@ onUnmounted(() => {
 
 // ── Derived display helpers ────────────────────────────────────────────────────
 
-const latencyOk = computed(() => systemLatency.value <= LATENCY_THROTTLE_THRESHOLD_MS)
+const latencyOk = computed(() => endToEndLatencyMs.value !== null && endToEndLatencyMs.value <= LATENCY_THROTTLE_THRESHOLD_MS)
 
 const stateInfo = computed(() => ({
   standby:   { label: 'STANDBY',   color: 'text-slate-500',   bg: 'bg-slate-500/10  border-slate-600/40' },
@@ -871,45 +956,177 @@ const stateInfo = computed(() => ({
 
         <div class="border-t border-slate-800"></div>
 
-        <!-- Performance metrics -->
+        <!-- ══════════════════════════════════════════════════════════════════════════ -->
+        <!-- Phase 5: 性能监控（三层结构）                                            -->
+        <!-- ══════════════════════════════════════════════════════════════════════════ -->
+
+        <!-- ── 第1层：主指标卡 ───────────────────────────────────────────────────── -->
         <div>
           <label class="block text-xs font-medium text-slate-400 tracking-wider uppercase mb-3">性能监控</label>
-          <div class="space-y-2.5">
 
-            <!-- Latency -->
+          <!-- 端到端延迟（带进度条） -->
+          <div class="bg-slate-800/60 rounded-lg p-3 border border-slate-700/50 mb-2">
+            <div class="flex items-center justify-between mb-1.5">
+              <span class="text-xs text-slate-500">端到端延迟</span>
+              <span class="text-lg font-bold font-mono tabular-nums"
+                    :class="latencyOk ? 'text-emerald-400' : 'text-red-400'">
+                {{ isAnalyzing ? fmt(endToEndLatencyMs) : '—' }}
+                <span class="text-xs font-normal opacity-70 ml-0.5">ms</span>
+              </span>
+            </div>
+            <div class="h-1.5 rounded-full bg-slate-700 overflow-hidden">
+              <div
+                class="h-full rounded-full transition-all duration-500"
+                :class="latencyOk ? 'bg-emerald-400' : 'bg-red-400'"
+                :style="{ width: isAnalyzing ? `${Math.min(((endToEndLatencyMs ?? 0) / LATENCY_BAR_MAX_MS) * 100, 100)}%` : '0%' }"
+              ></div>
+            </div>
+          </div>
+
+          <!-- 主指标四卡片 -->
+          <div class="grid grid-cols-4 gap-2 mb-3">
+
+            <!-- 后端处理耗时 -->
             <div class="bg-slate-800/60 rounded-lg p-3 border border-slate-700/50">
-              <div class="flex items-center justify-between mb-1.5">
-                <span class="text-xs text-slate-500">端到端延迟</span>
-                <span class="text-lg font-bold font-mono tabular-nums"
-                      :class="latencyOk ? 'text-emerald-400' : 'text-red-400'">
-                  {{ isAnalyzing ? systemLatency : '—' }}<span class="text-xs font-normal opacity-70 ml-0.5">ms</span>
+              <div class="text-xs text-slate-500 mb-1">后端处理耗时</div>
+              <div class="text-lg font-bold font-mono tabular-nums text-blue-400">
+                {{ isAnalyzing ? fmt(backendProcessMs) : '—' }}
+                <span class="text-xs font-normal opacity-70 ml-0.5">ms</span>
+              </div>
+            </div>
+
+            <!-- 后端处理 FPS -->
+            <div class="bg-slate-800/60 rounded-lg p-3 border border-slate-700/50">
+              <div class="text-xs text-slate-500 mb-1">后端处理 FPS</div>
+              <div class="text-lg font-bold font-mono tabular-nums text-emerald-400">
+                {{ isAnalyzing ? fmt(fpsBackend) : '—' }}
+                <span class="text-xs font-normal opacity-70 ml-0.5">FPS</span>
+              </div>
+            </div>
+
+            <!-- 纯推理耗时 -->
+            <div class="bg-slate-800/60 rounded-lg p-3 border border-slate-700/50">
+              <div class="text-xs text-slate-500 mb-1">纯推理耗时</div>
+              <div class="text-lg font-bold font-mono tabular-nums text-purple-400">
+                {{ isAnalyzing ? fmt(sessionMs) : '—' }}
+                <span class="text-xs font-normal opacity-70 ml-0.5">ms</span>
+              </div>
+            </div>
+
+            <!-- 纯推理 FPS -->
+            <div class="bg-slate-800/60 rounded-lg p-3 border border-slate-700/50">
+              <div class="text-xs text-slate-500 mb-1">纯推理 FPS</div>
+              <div class="text-lg font-bold font-mono tabular-nums text-purple-400">
+                {{ isAnalyzing ? fmt(fpsInfer) : '—' }}
+                <span class="text-xs font-normal opacity-70 ml-0.5">FPS</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ── 第2层：工程 / 实时指标明细 ─────────────────────────────────────── -->
+        <div>
+          <label class="block text-xs font-medium text-slate-400 tracking-wider uppercase mb-2">工程 &amp; 实时指标</label>
+          <div class="rounded-lg border border-slate-700/50 bg-slate-800/40 p-3 space-y-2 text-xs">
+
+            <!-- 工程指标子组 -->
+            <div class="text-slate-500 uppercase tracking-wider text-[10px] mb-1">工程指标</div>
+            <div class="grid grid-cols-2 gap-x-4 gap-y-1.5">
+
+              <!-- 算法全流程耗时 -->
+              <div class="flex items-center justify-between">
+                <span class="text-slate-500">算法全流程耗时</span>
+                <span class="font-mono tabular-nums text-blue-300">
+                  {{ isAnalyzing ? fmt(algoProcessMs) : '—' }} ms
                 </span>
               </div>
-              <div class="h-1.5 rounded-full bg-slate-700 overflow-hidden">
-                <div
-                  class="h-full rounded-full transition-all duration-500"
-                  :class="latencyOk ? 'bg-emerald-400' : 'bg-red-400'"
-                  :style="{ width: isAnalyzing ? `${Math.min((systemLatency / LATENCY_BAR_MAX_MS) * 100, 100)}%` : '0%' }"
-                ></div>
+
+              <!-- 算法全流程 FPS -->
+              <div class="flex items-center justify-between">
+                <span class="text-slate-500">算法全流程 FPS</span>
+                <span class="font-mono tabular-nums text-blue-300">
+                  {{ isAnalyzing ? fmt(fpsAlgo) : '—' }} FPS
+                </span>
               </div>
+
             </div>
 
-            <!-- Inference + FPS -->
-            <div class="grid grid-cols-2 gap-2">
-              <div class="bg-slate-800/60 rounded-lg p-3 border border-slate-700/50">
-                <div class="text-xs text-slate-500 mb-1">推理耗时</div>
-                <div class="text-lg font-bold font-mono tabular-nums text-blue-400">
-                  {{ isAnalyzing ? inferenceTime : '—' }}<span class="text-xs font-normal opacity-70 ml-0.5">ms</span>
-                </div>
+            <div class="border-t border-slate-700/40 pt-2"></div>
+
+            <!-- 系统实时指标子组 -->
+            <div class="text-slate-500 uppercase tracking-wider text-[10px] mb-1">系统实时指标</div>
+            <div class="grid grid-cols-2 gap-x-4 gap-y-1.5">
+
+              <!-- 发送节奏 -->
+              <div class="flex items-center justify-between">
+                <span class="text-slate-500">发送节奏</span>
+                <span class="font-mono tabular-nums text-slate-300">
+                  {{ isAnalyzing ? fmt(frontendSendIntervalMs) : '—' }} ms
+                </span>
               </div>
-              <div class="bg-slate-800/60 rounded-lg p-3 border border-slate-700/50">
-                <div class="text-xs text-slate-500 mb-1">吞吐量(算法FPS)</div>
-                <div class="text-lg font-bold font-mono tabular-nums text-emerald-400">
-                  {{ isAnalyzing ? inferenceFps : '—' }}<span class="text-xs font-normal opacity-70 ml-0.5">FPS</span>
-                </div>
-                <div class="text-xs text-slate-600 mt-0.5">1000ms / 推理耗时</div>
+
+              <!-- 发送节奏 FPS -->
+              <div class="flex items-center justify-between">
+                <span class="text-slate-500">发送节奏 FPS</span>
+                <span class="font-mono tabular-nums text-slate-300">
+                  {{ isAnalyzing ? fmt(fpsSend) : '—' }} FPS
+                </span>
               </div>
+
+              <!-- 结果返回节奏 -->
+              <div class="flex items-center justify-between">
+                <span class="text-slate-500">结果返回节奏</span>
+                <span class="font-mono tabular-nums text-emerald-300">
+                  {{ isAnalyzing ? fmt(resultIntervalMs) : '—' }} ms
+                </span>
+              </div>
+
+              <!-- 结果返回 FPS -->
+              <div class="flex items-center justify-between">
+                <span class="text-slate-500">结果返回 FPS</span>
+                <span class="font-mono tabular-nums text-emerald-300">
+                  {{ isAnalyzing ? fmt(fpsResult) : '—' }} FPS
+                </span>
+              </div>
+
             </div>
+          </div>
+        </div>
+
+        <!-- ── 第3层：调试诊断区 ───────────────────────────────────────────────── -->
+        <div>
+          <label class="block text-xs font-medium text-amber-400/80 tracking-wider uppercase mb-2">链路诊断</label>
+          <div class="rounded-lg border border-amber-700/40 bg-amber-950/15 p-3 space-y-1.5 text-xs">
+
+            <!-- 前端编码耗时 -->
+            <div class="flex items-center justify-between">
+              <span class="text-slate-500">前端编码耗时</span>
+              <span class="font-mono tabular-nums text-amber-300">
+                {{ isAnalyzing ? fmt(frontendEncodeMs) : '—' }} ms
+              </span>
+            </div>
+
+            <!-- 前端消息处理 -->
+            <div class="flex items-center justify-between">
+              <span class="text-slate-500">前端消息处理</span>
+              <span class="font-mono tabular-nums text-amber-300">
+                {{ isAnalyzing ? fmt(frontendRenderMs) : '—' }} ms
+              </span>
+            </div>
+
+            <!-- 链路额外开销 -->
+            <div class="flex items-center justify-between pt-1 border-t border-amber-700/30">
+              <span class="text-slate-500">链路额外开销</span>
+              <span class="font-mono tabular-nums text-red-400">
+                {{ isAnalyzing ? fmt(pipelineExtraMs) : '—' }} ms
+              </span>
+            </div>
+
+            <!-- 提示文字 -->
+            <div class="text-amber-600/60 text-[10px] leading-relaxed pt-1">
+              额外开销不含后端推理，含网络传输、队列等待、前端处理等
+            </div>
+
           </div>
         </div>
 

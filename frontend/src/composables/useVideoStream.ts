@@ -40,6 +40,8 @@ interface UseVideoStreamOptions {
     prompt_classes: string[]
     selected_classes: string[]
   }) => void
+  // [临时测速] 编码完成回调，传入编码耗时(ms)
+  onEncode?: (encodeMs: number) => void
 }
 
 interface UseVideoStreamReturn {
@@ -60,6 +62,7 @@ export function useVideoStream({
   promptClasses,
   selectedClasses,
   onFrame,
+  onEncode,
 }: UseVideoStreamOptions): UseVideoStreamReturn {
   const sourceType = ref<VideoSourceType>('local_file')
   const isPlaying  = ref(false)
@@ -81,14 +84,23 @@ export function useVideoStream({
     if (!video || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return
     if (video.videoWidth === 0 || video.videoHeight === 0) return
 
+    // [临时测速] 开始编码计时
+    const encodeStart = performance.now()
+
     offscreen.width  = video.videoWidth
     offscreen.height = video.videoHeight
     offCtx.drawImage(video, 0, 0)
 
+    const imageBase64 = offscreen.toDataURL('image/jpeg', VIDEO_JPEG_QUALITY)
+
+    // [临时测速] 编码完成，记录耗时
+    const encodeMs = performance.now() - encodeStart
+    onEncode?.(encodeMs)
+
     onFrame({
       frame_id:     frameId++,
       timestamp:    Date.now() / 1000,
-      image_base64: offscreen.toDataURL('image/jpeg', VIDEO_JPEG_QUALITY),
+      image_base64: imageBase64,
       // Phase 3.1: Include model-related fields for dynamic configuration
       model_id: modelId.value,
       prompt_classes: promptClasses.value,
