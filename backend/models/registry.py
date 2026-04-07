@@ -107,6 +107,22 @@ COCO_CLASSES = [
 
 VEHICLE_CLASSES = ["car", "truck", "bus", "van", "freight_car"]
 
+# VisDrone 训练集 10 类，索引顺序与模型输出 argmax 严格对应
+# 格式：[4 bbox + 10 class_scores]，class_scores.argmax() 的返回值直接映射到此列表
+# 来源：yolov8x_visdrone_best.yaml names 字段
+VISDRONE_CLASSES = [
+    "pedestrian",       # 0
+    "people",           # 1
+    "bicycle",          # 2
+    "car",              # 3
+    "van",              # 4
+    "truck",            # 5
+    "tricycle",         # 6
+    "awning-tricycle",  # 7
+    "bus",              # 8
+    "motor",            # 9
+]
+
 
 # ════════════════════════════════════════════════════════════════════════════════
 #  MODEL_REGISTRY  —  frontend / API source of truth
@@ -143,6 +159,16 @@ MODEL_REGISTRY: dict[str, ModelCapabilities] = {
         class_filter_enabled=True,
         description="车辆专用模型（ONNX），Fine-tuned on car, truck, bus, van, freight_car。不可自定义类别，但可筛选显示。",
     ),
+    "YOLOv8-VisDrone": ModelCapabilities(
+        model_id="YOLOv8-VisDrone",
+        display_name="YOLOv8 VisDrone",
+        model_type="closed_set",
+        supports_prompt=False,
+        prompt_editable=False,
+        supported_classes=VISDRONE_CLASSES,
+        class_filter_enabled=True,
+        description="VisDrone 数据集 Fine-tuned 模型，支持 pedestrian, people, bicycle, car, van, truck, tricycle, awning-tricycle, bus, motor 十类。",
+    ),
 }
 
 
@@ -176,6 +202,13 @@ RUNTIME_CONFIG: dict[str, ModelConfig] = {
         confidence_threshold=0.25,
         warmup_enabled=True,
         device="cuda:0",                   # CUDAExecutionProvider when onnxruntime-gpu installed
+    ),
+    "YOLOv8-VisDrone": ModelConfig(
+        runtime_type="onnx",
+        weight_path=_WEIGHTS_DIR / "VisDrone" / "yolov8x_visdrone_best.onnx",
+        confidence_threshold=0.25,
+        warmup_enabled=True,
+        device="cuda:0",
     ),
 }
 
