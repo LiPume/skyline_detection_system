@@ -235,7 +235,7 @@ watch(isAnalyzing, v => { isGpuActive.value    = v }, { immediate: true })
 // ── Video stream ───────────────────────────────────────────────────────────────
 const selectedClassesArray = computed<string[]>(() => Array.from(selectedClasses.value))
 
-const { sourceType, isPlaying, hasVideo, loadFile, selectWebcam, startPush, stopPush } =
+const { sourceType, isPlaying, hasVideo, loadFile, selectWebcam, startPush, stopPush, resetVideo } =
   useVideoStream({
     videoEl,
     systemLatency: endToEndLatencyMs,
@@ -475,6 +475,17 @@ const stateInfo = computed(() => ({
   paused:    { label: 'PAUSED',   color: 'text-amber-400',   bg: 'bg-amber-500/10  border-amber-500/40' },
   finished:  { label: 'COMPLETE', color: 'text-cyan-400',    bg: 'bg-cyan-500/10  border-cyan-500/40' },
 }[analysisState.value]))
+
+// ── Video Reset ─────────────────────────────────────────────────────────────────
+
+function resetToStandby() {
+  stopPush()
+  videoEl.value?.pause()
+  resetVideo()
+  currentDetections.value = []
+  resetStats()
+  analysisState.value = 'standby'
+}
 </script>
 
 <template>
@@ -626,6 +637,14 @@ const stateInfo = computed(() => ({
                 </div>
               </div>
             </div>
+            <button
+              class="mt-2 pointer-events-auto px-3 py-1.5 rounded-lg border text-xs font-medium
+                     bg-slate-800/90 border-slate-600 text-slate-300
+                     hover:bg-slate-700 hover:border-slate-500 transition-all"
+              @click="resetToStandby"
+            >
+              ← 继续添加视频
+            </button>
           </div>
         </Transition>
 
@@ -706,11 +725,22 @@ const stateInfo = computed(() => ({
                class="mt-2 flex items-center justify-between px-2.5 py-1.5 rounded-lg
                       bg-emerald-500/8 border border-emerald-500/20">
             <span class="text-emerald-400 text-xs">✓ 视频已就绪</span>
-            <button
-              class="text-xs text-slate-500 hover:text-slate-300 transition-colors"
-              :disabled="isLocked"
-              @click="triggerFilePicker"
-            >更换</button>
+            <div class="flex items-center gap-1.5">
+              <button
+                class="px-2.5 py-1 rounded text-xs font-medium bg-amber-500/15 text-amber-400
+                       hover:bg-amber-500/25 border border-amber-500/30 hover:border-amber-500/50
+                       transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                :disabled="isLocked"
+                @click="triggerFilePicker"
+              >更换</button>
+              <button
+                class="px-2.5 py-1 rounded text-xs font-medium bg-red-500/15 text-red-400
+                       hover:bg-red-500/25 border border-red-500/30 hover:border-red-500/50
+                       transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                :disabled="isLocked"
+                @click="resetToStandby"
+              >重置</button>
+            </div>
           </div>
         </div>
 

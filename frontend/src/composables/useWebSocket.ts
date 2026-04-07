@@ -5,6 +5,7 @@
  * - Exponential backoff auto-reconnect (1s → 2s → 4s → … → 30s max)
  * - Reactive connection status
  * - Typed message dispatch via onMessage callback
+ * - Heartbeat ping/pong to detect dead connections
  */
 import { ref, onUnmounted } from 'vue'
 import type { Ref } from 'vue'
@@ -14,6 +15,12 @@ import {
   WS_MAX_RECONNECT_DELAY_MS,
   WS_BASE_RECONNECT_DELAY_MS,
 } from '@/config'
+
+// Heartbeat settings (must match backend)
+const HEARTBEAT_INTERVAL_MS = 15_000
+const HEARTBEAT_TIMEOUT_MS = 20_000
+const PING_MESSAGE = "__heartbeat_ping__"
+const PONG_MESSAGE = "__heartbeat_pong__"
 
 interface UseWebSocketOptions {
   onMessage: (msg: ServerMessage) => void
@@ -28,6 +35,8 @@ interface UseWebSocketReturn {
   connect: () => void
   disconnect: () => void
   send: (data: string) => boolean
+  /** Force reconnect - useful when page becomes visible again */
+  forceReconnect: () => void
 }
 
 export function useWebSocket({ onMessage, onSendFailure }: UseWebSocketOptions): UseWebSocketReturn {
@@ -38,6 +47,9 @@ export function useWebSocket({ onMessage, onSendFailure }: UseWebSocketOptions):
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
   let reconnectDelay = WS_BASE_RECONNECT_DELAY_MS
   let manualDisconnect = false
+  let heartbeatTimer: ReturnType<typeof setTimeout> | null = null
+  let heartbeatTimeoutTimer: ReturnType<typeof setTimeout> | null = null
+  let lastPongTime = 0
 
   function clearReconnectTimer() {
     if (reconnectTimer !== null) {
@@ -46,9 +58,49 @@ export function useWebSocket({ onMessage, onSendFailure }: UseWebSocketOptions):
     }
   }
 
+  function clearHeartbeatTimers() {
+    if (heartbeatTimer !== null) {
+      clearInterval(heartbeatTimer)
+      heartbeatTimer = null
+    }
+    if (heartbeatTimeoutTimer !== null) {
+      clearTimeout(heartbeatTimeoutTimer)
+      heartbeatTimeoutTimer = null
+    }
+  }
+
+  function startHeartbeat() {
+    clearHeartbeatTimers()
+    lastPongTime = Date.now()
+
+    heartbeatTimer = setInterval(() => {
+      if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(PING_MESSAGE)
+
+        // Set timeout for pong response
+        heartbeatTimeoutTimer = setTimeout(() => {
+          const timeSincePong = Date.now() - lastPongTime
+          if (timeSincePong > HEARTBEAT_TIMEOUT_MS) {
+            console.warn('[WS] Heartbeat timeout, reconnecting...')
+            ws?.close()
+          }
+        }, HEARTBEAT_TIMEOUT_MS)
+      }
+    }, HEARTBEAT_INTERVAL_MS)
+  }
+
+  function handlePong() {
+    lastPongTime = Date.now()
+    if (heartbeatTimeoutTimer !== null) {
+      clearTimeout(heartbeatTimeoutTimer)
+      heartbeatTimeoutTimer = null
+    }
+  }
+
   function connect() {
     manualDisconnect = false
     clearReconnectTimer()
+    clearHeartbeatTimers()
 
     if (ws && ws.readyState === WebSocket.OPEN) return
 
@@ -58,11 +110,24 @@ export function useWebSocket({ onMessage, onSendFailure }: UseWebSocketOptions):
     ws.onopen = () => {
       status.value = 'connected'
       reconnectDelay = WS_BASE_RECONNECT_DELAY_MS // reset backoff on success
+      startHeartbeat()
     }
 
     ws.onmessage = (event: MessageEvent<string>) => {
+      const data = event.data
+
+      // Handle heartbeat messages
+      if (data === PONG_MESSAGE) {
+        handlePong()
+        return
+      }
+      if (data === PING_MESSAGE) {
+        ws?.send(PONG_MESSAGE)
+        return
+      }
+
       try {
-        const parsed = JSON.parse(event.data) as ServerMessage
+        const parsed = JSON.parse(data) as ServerMessage
         onMessage(parsed)
       } catch {
         // silently drop malformed messages
@@ -71,6 +136,7 @@ export function useWebSocket({ onMessage, onSendFailure }: UseWebSocketOptions):
 
     ws.onclose = () => {
       status.value = 'disconnected'
+      clearHeartbeatTimers()
       ws = null
       if (!manualDisconnect) {
         scheduleReconnect()
@@ -93,9 +159,21 @@ export function useWebSocket({ onMessage, onSendFailure }: UseWebSocketOptions):
   function disconnect() {
     manualDisconnect = true
     clearReconnectTimer()
+    clearHeartbeatTimers()
     ws?.close()
     ws = null
     status.value = 'disconnected'
+  }
+
+  function forceReconnect() {
+    manualDisconnect = false
+    clearReconnectTimer()
+    clearHeartbeatTimers()
+    ws?.close()
+    ws = null
+    status.value = 'disconnected'
+    reconnectDelay = WS_BASE_RECONNECT_DELAY_MS
+    connect()
   }
 
   /** Returns true if the message was queued for send. */
@@ -109,7 +187,20 @@ export function useWebSocket({ onMessage, onSendFailure }: UseWebSocketOptions):
     return false
   }
 
-  onUnmounted(disconnect)
+  // Handle visibility change to reconnect if page was hidden
+  function handleVisibilityChange() {
+    if (document.visibilityState === 'visible' && status.value === 'disconnected' && !manualDisconnect) {
+      console.log('[WS] Page became visible, attempting reconnect...')
+      forceReconnect()
+    }
+  }
 
-  return { status, sendFailCount, connect, disconnect, send }
+  document.addEventListener('visibilitychange', handleVisibilityChange)
+
+  onUnmounted(() => {
+    document.removeEventListener('visibilitychange', handleVisibilityChange)
+    disconnect()
+  })
+
+  return { status, sendFailCount, connect, disconnect, send, forceReconnect }
 }

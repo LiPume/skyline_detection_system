@@ -151,7 +151,7 @@ def _blocking_inference(frame: VideoFrame) -> InferenceResult:
 
 class InferenceScheduler:
     """
-    LIFO single-frame-buffer scheduler.
+    LIFO single-frame-buffer scheduler with overflow protection.
 
     When a new frame arrives while the AI thread is busy:
       - the queued frame is overwritten by the new one (stale frame dropped)
@@ -165,9 +165,13 @@ class InferenceScheduler:
         self._lock = asyncio.Lock()
         self._has_frame = asyncio.Event()
         self._running = False
+        self._dropped_frames = 0  # Track dropped frames for monitoring
 
     async def push_frame(self, frame: VideoFrame) -> None:
         async with self._lock:
+            # Track if we're about to drop a frame (overwriting _latest_frame)
+            if self._latest_frame is not None:
+                self._dropped_frames += 1
             self._latest_frame = frame
             self._has_frame.set()
 

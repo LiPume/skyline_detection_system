@@ -53,6 +53,7 @@ interface UseVideoStreamReturn {
   startPush:    () => void
   stopPush:     () => void
   release:      () => void
+  resetVideo:   () => void  // Reset to standby state (stops push, releases resources)
 }
 
 export function useVideoStream({
@@ -72,6 +73,13 @@ export function useVideoStream({
   let pushTimerId: ReturnType<typeof setTimeout> | null = null
   let currentBlobUrl: string | null = null
   let webcamStream:   MediaStream  | null = null
+
+  // Adaptive FPS control state
+  let consecutiveHighLatency = 0
+  let currentFpsLevel = 0  // 0=normal, 1=throttled
+  const HIGH_LATENCY_THRESHOLD = 150  // ms - start throttling earlier
+  const RECOVERY_THRESHOLD = 3  // consecutive low-latency frames to recover
+  const LOW_LATENCY_RECOVERY = 100  // ms - latency to consider "recovered"
 
   // Dedicated offscreen canvas for frame extraction
   const offscreen = document.createElement('canvas')
@@ -113,10 +121,33 @@ export function useVideoStream({
   function startPush() {
     if (pushTimerId !== null) return
     isPlaying.value = true
+    consecutiveHighLatency = 0
+    currentFpsLevel = 0
 
     function tick() {
       captureAndSend()
-      const fps = systemLatency.value > 200 ? VIDEO_THROTTLED_FPS : VIDEO_TARGET_FPS
+
+      // Adaptive FPS: smart throttling based on latency trends
+      const latency = systemLatency.value ?? 0
+
+      if (currentFpsLevel === 0 && latency > HIGH_LATENCY_THRESHOLD) {
+        // Transitioning to throttled mode
+        currentFpsLevel = 1
+        consecutiveHighLatency = 1
+      } else if (currentFpsLevel === 1 && latency > HIGH_LATENCY_THRESHOLD) {
+        consecutiveHighLatency++
+      } else if (currentFpsLevel === 1 && latency < LOW_LATENCY_RECOVERY) {
+        consecutiveHighLatency--
+        if (consecutiveHighLatency <= -RECOVERY_THRESHOLD) {
+          // Recover to normal mode
+          currentFpsLevel = 0
+          consecutiveHighLatency = 0
+        }
+      } else {
+        consecutiveHighLatency = 0
+      }
+
+      const fps = currentFpsLevel === 1 ? VIDEO_THROTTLED_FPS : VIDEO_TARGET_FPS
       pushTimerId = setTimeout(tick, 1000 / fps) as unknown as ReturnType<typeof setTimeout>
     }
     tick()
@@ -132,9 +163,14 @@ export function useVideoStream({
 
   // ── Source management ──────────────────────────────────────────────────────
 
-  /** Full teardown — releases all media resources and resets to STANDBY. */
-  function release() {
+  /**
+   * Reset to standby state - stops push, releases resources, shows drop zone.
+   * Unlike release(), this resets frame counter and keeps the video element intact.
+   */
+  function resetVideo() {
     stopPush()
+    consecutiveHighLatency = 0
+    currentFpsLevel = 0
 
     webcamStream?.getTracks().forEach((t) => t.stop())
     webcamStream = null
@@ -149,10 +185,16 @@ export function useVideoStream({
       video.pause()
       video.srcObject = null
       video.src = ''
-      video.load()   // resets internal state to EMPTY
+      video.load()
     }
 
+    frameId = 0
     hasVideo.value = false
+  }
+
+  /** Full teardown — releases all media resources and resets to STANDBY. */
+  function release() {
+    resetVideo()
   }
 
   /**
@@ -162,7 +204,7 @@ export function useVideoStream({
    * can detect when playback finishes.
    */
   function loadFile(file: File) {
-    release()
+    resetVideo()
     sourceType.value = 'local_file'
 
     currentBlobUrl = URL.createObjectURL(file)
@@ -182,7 +224,7 @@ export function useVideoStream({
    * Connect a webcam and start streaming immediately (no READY stage for live feeds).
    */
   async function selectWebcam() {
-    release()
+    resetVideo()
     sourceType.value = 'webcam'
 
     const stream = await navigator.mediaDevices.getUserMedia(CAMERA_CONSTRAINTS)
@@ -199,5 +241,5 @@ export function useVideoStream({
 
   onUnmounted(release)
 
-  return { sourceType, isPlaying, hasVideo, loadFile, selectWebcam, startPush, stopPush, release }
+  return { sourceType, isPlaying, hasVideo, loadFile, selectWebcam, startPush, stopPush, release, resetVideo }
 }
