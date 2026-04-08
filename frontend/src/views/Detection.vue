@@ -323,8 +323,11 @@ document.addEventListener('visibilitychange', handleVisibilityChange)
 // ── Video stream ───────────────────────────────────────────────────────────────
 const selectedClassesArray = computed<string[]>(() => Array.from(selectedClasses.value))
 
-const { sourceType, isPlaying, hasVideo, loadFile, selectWebcam, startPush, stopPush, resetVideo, ackFrame } =
-  useVideoStream({
+const {
+  sourceType, isPlaying, hasVideo,
+  loadFile, selectWebcam, startPush, stopPush, resetVideo, ackFrame,
+  pending, pendingFrameId, pendingAgeMs,   // 临时调试诊断
+} = useVideoStream({
     videoEl,
     systemLatency: endToEndLatencyMs,
     modelId: selectedModelId,
@@ -1276,6 +1279,29 @@ function resetToStandby() {
               <span class="font-mono tabular-nums text-red-400">
                 {{ isAnalyzing ? fmt(pipelineExtraMs) : '—' }} ms
               </span>
+            </div>
+
+            <!-- 临时调试：pending 状态 -->
+            <div class="border-t border-amber-700/30 pt-1.5 mt-1 space-y-1">
+              <div class="text-amber-600/70 text-[10px] uppercase tracking-wider">Pending 诊断</div>
+              <div class="flex items-center justify-between">
+                <span class="text-slate-500">pending</span>
+                <span class="font-mono tabular-nums text-amber-300">
+                  {{ pending ? 'true' : 'false' }}
+                </span>
+              </div>
+              <div class="flex items-center justify-between">
+                <span class="text-slate-500">pendingFrameId</span>
+                <span class="font-mono tabular-nums text-amber-300">
+                  {{ pendingFrameId >= 0 ? pendingFrameId : '—' }}
+                </span>
+              </div>
+              <div class="flex items-center justify-between">
+                <span class="text-slate-500">pendingAgeMs</span>
+                <span class="font-mono tabular-nums text-amber-300">
+                  {{ isAnalyzing ? Math.round(pendingAgeMs) + 'ms' : '—' }}
+                </span>
+              </div>
             </div>
 
             <!-- 提示文字 -->

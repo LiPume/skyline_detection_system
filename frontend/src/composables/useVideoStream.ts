@@ -15,7 +15,7 @@
  * 
  * Phase 3.1: Updated to support model capability driven frame data
  */
-import { ref, onUnmounted } from 'vue'
+import { ref, computed, onUnmounted } from 'vue'
 import type { Ref } from 'vue'
 import type { VideoSourceType } from '@/types/skyline'
 import {
@@ -56,6 +56,12 @@ interface UseVideoStreamReturn {
   resetVideo:   () => void  // Reset to standby state (stops push, releases resources)
   /** 背压 ACK：收到 inference_result 时调用，告知该帧已完成，允许发下一帧 */
   ackFrame: (frameId: number) => void
+  /** 诊断：pending 是否为 true */
+  pending:        Ref<boolean>
+  /** 诊断：当前等待的 frame_id（-1 表示无 pending） */
+  pendingFrameId: Ref<number>
+  /** 诊断：pending 已持续多少 ms */
+  pendingAgeMs:   Ref<number>
 }
 
 export function useVideoStream({
@@ -79,24 +85,30 @@ export function useVideoStream({
   // ── 背压机制：最多 1 帧 in-flight ─────────────────────────────────────────
   // pending：当前是否有帧正在等待 inference_result
   // pendingFrameId：正在等待的那帧的 frame_id（用于日志和 ACK 对齐）
-  let pending       = false
+  let pending        = false
   let pendingFrameId = -1
   let pendingTimerId: ReturnType<typeof setTimeout> | null = null
-  // 用于限频日志：上一次打印 PUSH 日志的时间戳（毫秒）
-  let lastLogTime   = 0
+  let pendingSetAt   = 0   // pending 置 true 时的 performance.now()，用于计算 pendingAgeMs
+  // 用于限频日志：上一次打印各 tag 日志的时间戳（毫秒），每个 tag 独立计数
+  const lastLogTime: Record<string, number> = {}
   const LOG_INTERVAL_MS = 3000  // 相同日志至少间隔 3s，避免刷屏
 
   /**
    * 限频日志辅助。
-   * tag: 日志标签，msg: 日志正文。
+   * tag: 日志标签（与 lastLogTime[key] 一一对应），msg: 日志正文。
    * 仅当距上次打印同 tag 超过 LOG_INTERVAL_MS 时才输出。
    */
   function pushLog(tag: string, msg: string) {
     const now = performance.now()
-    if (now - lastLogTime >= LOG_INTERVAL_MS) {
-      console.log(`[PUSH] ${tag} ${msg}`)
-      lastLogTime = now
+    if (!lastLogTime[tag] || now - lastLogTime[tag] >= LOG_INTERVAL_MS) {
+      console.log(`[PUSH] [${tag}] ${msg}`)
+      lastLogTime[tag] = now
     }
+  }
+
+  /** 计算当前 pending 已持续多少 ms（0 表示当前无 pending） */
+  function getPendingAgeMs(): number {
+    return pending ? performance.now() - pendingSetAt : 0
   }
 
   /**
@@ -104,24 +116,50 @@ export function useVideoStream({
    * 由 Detection.vue 在收到 inference_result 时调用。
    *
    * 策略说明：
-   * - 按 frame_id 严格对齐：只对匹配的那帧 ACK（防止乱序结果误释放 pending）。
+   * - 按 frame_id 精确对齐：只对匹配的那帧 ACK（防止乱序结果误释放 pending）。
    * - 若当前 pending 为 false 或 frame_id 不匹配，则忽略（防止串台）。
+   * - 降级保护：若 pending 已超时（age >= PENDING_TIMEOUT_MS），且收到的结果帧号
+   *   大于 pendingFrameId（说明中间丢了帧），允许强制释放 pending 一次，防止长视频
+   *   跑久后因一帧之差永久卡死。
    */
   function ackFrame(frameId: number) {
-    if (!pending || pendingFrameId !== frameId) return
-    clearPending()
-    pushLog('frame ack', `id=${frameId}`)
-    // 立即触发下一帧（如果正在播放）
+    if (!pending) {
+      pushLog('ack-ignored', `id=${frameId} but not pending`)
+      return
+    }
+    if (pendingFrameId !== frameId) {
+      const age = getPendingAgeMs()
+      if (age >= PENDING_TIMEOUT_MS && frameId > pendingFrameId) {
+        const lost = frameId - pendingFrameId
+        pushLog('ack-degraded', `id=${frameId} > pendingId=${pendingFrameId} lost=${lost} force-clear`)
+        _clearPending('degraded-ack')
+        triggerTickIfPlaying()
+      } else {
+        pushLog('ack-mismatch', `id=${frameId} != pendingId=${pendingFrameId} age=${Math.round(age)}ms`)
+      }
+      return
+    }
+    _clearPending('ack')
+    pushLog('frame ack', `id=${frameId} age=${Math.round(getPendingAgeMs())}ms`)
     triggerTickIfPlaying()
   }
 
-  function clearPending() {
-    pending       = false
+  /**
+   * 内部统一清理 pending 状态。
+   * reason: 清理来源标识，用于日志记录。
+   */
+  function _clearPending(reason: string) {
+    pending        = false
     pendingFrameId = -1
     if (pendingTimerId !== null) {
       clearTimeout(pendingTimerId)
       pendingTimerId = null
     }
+    pushLog('pending cleared', `reason=${reason} age=${Math.round(getPendingAgeMs())}ms`)
+  }
+
+  function clearPending() {
+    _clearPending('explicit')
   }
 
   // Adaptive FPS control state
@@ -142,7 +180,6 @@ export function useVideoStream({
    */
   function triggerTickIfPlaying() {
     if (!isPlaying.value || pushTimerId !== null) return
-    const fps = currentFpsLevel === 1 ? VIDEO_THROTTLED_FPS : VIDEO_TARGET_FPS
     pushTimerId = setTimeout(tick, 0) as unknown as ReturnType<typeof setTimeout>
   }
 
@@ -151,10 +188,9 @@ export function useVideoStream({
    * 仅打印一次限频 warning（LOG_INTERVAL_MS 控制）。
    */
   function onPendingTimeout() {
-    pendingTimerId = null
     const fid = pendingFrameId
-    pushLog('frame timeout', `id=${fid}`)
-    clearPending()
+    pushLog('frame timeout', `id=${fid} age=${Math.round(getPendingAgeMs())}ms`)
+    _clearPending('timeout')
     // timeout 后仍然触发下一帧（防止发送死锁）
     triggerTickIfPlaying()
   }
@@ -187,11 +223,12 @@ export function useVideoStream({
 
     const currentFrameId = frameId++
     // ── 背压 B：发帧后立即置 pending 并启动超时计时 ──────────────────────
-    pending       = true
+    pending        = true
     pendingFrameId = currentFrameId
+    pendingSetAt   = performance.now()
     pendingTimerId = setTimeout(onPendingTimeout, PENDING_TIMEOUT_MS) as unknown as ReturnType<typeof setTimeout>
 
-    pushLog('frame sent', `id=${currentFrameId}`)
+    pushLog('frame sent', `id=${currentFrameId} age=0ms`)
 
     onFrame({
       frame_id:     currentFrameId,
@@ -249,6 +286,7 @@ export function useVideoStream({
     }
     isPlaying.value = false
     clearPending()
+    pendingSetAt = 0
   }
 
   // ── Source management ──────────────────────────────────────────────────────
@@ -332,5 +370,17 @@ export function useVideoStream({
 
   onUnmounted(release)
 
-  return { sourceType, isPlaying, hasVideo, loadFile, selectWebcam, startPush, stopPush, release, resetVideo, ackFrame }
+  // 诊断状态（用于 Detection.vue 调试面板）
+  const pendingRef        = computed<boolean>(() => pending)
+  const pendingFrameIdRef = computed<number>(() => pendingFrameId)
+  const pendingAgeMsRef   = computed<number>(() => getPendingAgeMs())
+
+  return {
+    sourceType, isPlaying, hasVideo,
+    loadFile, selectWebcam, startPush, stopPush, release, resetVideo, ackFrame,
+    // 诊断导出
+    pending:        pendingRef,
+    pendingFrameId: pendingFrameIdRef,
+    pendingAgeMs:   pendingAgeMsRef,
+  }
 }
