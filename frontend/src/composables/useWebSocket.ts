@@ -6,6 +6,8 @@
  * - Reactive connection status
  * - Typed message dispatch via onMessage callback
  * - Heartbeat ping/pong to detect dead connections
+ * - Visibility-aware reconnect: suppressed while page is hidden,
+ *   controlled single reconnect when page becomes visible again
  */
 import { ref, onUnmounted } from 'vue'
 import type { Ref } from 'vue'
@@ -37,6 +39,9 @@ interface UseWebSocketReturn {
   send: (data: string) => boolean
   /** Force reconnect - useful when page becomes visible again */
   forceReconnect: () => void
+  /** Resolved when ws is OPEN, or immediately if already connected.
+   *  Useful after a visibility-change reconnect to know when it's safe to resume. */
+  waitForConnected: () => Promise<void>
 }
 
 export function useWebSocket({ onMessage, onSendFailure }: UseWebSocketOptions): UseWebSocketReturn {
@@ -47,9 +52,18 @@ export function useWebSocket({ onMessage, onSendFailure }: UseWebSocketOptions):
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
   let reconnectDelay = WS_BASE_RECONNECT_DELAY_MS
   let manualDisconnect = false
-  let heartbeatTimer: ReturnType<typeof setTimeout> | null = null
+  let heartbeatTimer: ReturnType<typeof setInterval> | null = null
   let heartbeatTimeoutTimer: ReturnType<typeof setTimeout> | null = null
   let lastPongTime = 0
+
+  // ── Visibility-aware reconnect guard ───────────────────────────────────────
+  // Set to true while we are mid-reconnect triggered by a visibility change.
+  // Prevents multiple simultaneous reconnect attempts.
+  let isRecovering = false
+
+  // Promise resolve held while waiting for OPEN after a reconnect.
+  // Allows callers (e.g. Detection.vue) to await connection.
+  let pendingConnectedResolve: (() => void) | null = null
 
   function clearReconnectTimer() {
     if (reconnectTimer !== null) {
@@ -77,7 +91,6 @@ export function useWebSocket({ onMessage, onSendFailure }: UseWebSocketOptions):
       if (ws?.readyState === WebSocket.OPEN) {
         ws.send(PING_MESSAGE)
 
-        // Set timeout for pong response
         heartbeatTimeoutTimer = setTimeout(() => {
           const timeSincePong = Date.now() - lastPongTime
           if (timeSincePong > HEARTBEAT_TIMEOUT_MS) {
@@ -98,7 +111,7 @@ export function useWebSocket({ onMessage, onSendFailure }: UseWebSocketOptions):
   }
 
   function connect() {
-    console.log('[WS] connect requested')
+    // Block duplicate connect at both OPEN and CONNECTING
     if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
       console.log('[WS] duplicate connect blocked')
       return
@@ -116,12 +129,17 @@ export function useWebSocket({ onMessage, onSendFailure }: UseWebSocketOptions):
       status.value = 'connected'
       reconnectDelay = WS_BASE_RECONNECT_DELAY_MS
       startHeartbeat()
+
+      // Resolve any pending waitForConnected call
+      if (pendingConnectedResolve) {
+        pendingConnectedResolve()
+        pendingConnectedResolve = null
+      }
     }
 
     ws.onmessage = (event: MessageEvent<string>) => {
       const data = event.data
 
-      // Handle heartbeat messages
       if (data === PONG_MESSAGE) {
         handlePong()
         return
@@ -144,7 +162,16 @@ export function useWebSocket({ onMessage, onSendFailure }: UseWebSocketOptions):
       status.value = 'disconnected'
       clearHeartbeatTimers()
       ws = null
-      if (!manualDisconnect) {
+
+      // Clear pending connected promise so callers don't hang forever
+      if (pendingConnectedResolve) {
+        pendingConnectedResolve()
+        pendingConnectedResolve = null
+      }
+
+      // Visibility-aware: do NOT schedule reconnect while page is hidden.
+      // The visibility handler will take care of reconnecting when the page returns.
+      if (!manualDisconnect && document.visibilityState !== 'hidden') {
         scheduleReconnect()
       }
     }
@@ -155,6 +182,12 @@ export function useWebSocket({ onMessage, onSendFailure }: UseWebSocketOptions):
   }
 
   function scheduleReconnect() {
+    // Visibility guard: never blind-reconnect while hidden.
+    // This fires for background-tab heartbeat timeouts, etc.
+    if (document.visibilityState === 'hidden') {
+      return
+    }
+
     clearReconnectTimer()
     reconnectTimer = setTimeout(() => {
       reconnectDelay = Math.min(reconnectDelay * 2, WS_MAX_RECONNECT_DELAY_MS)
@@ -169,6 +202,10 @@ export function useWebSocket({ onMessage, onSendFailure }: UseWebSocketOptions):
     ws?.close()
     ws = null
     status.value = 'disconnected'
+    if (pendingConnectedResolve) {
+      pendingConnectedResolve()
+      pendingConnectedResolve = null
+    }
   }
 
   function forceReconnect() {
@@ -193,12 +230,54 @@ export function useWebSocket({ onMessage, onSendFailure }: UseWebSocketOptions):
     return false
   }
 
-  // Handle visibility change to reconnect if page was hidden
-  function handleVisibilityChange() {
-    if (document.visibilityState === 'visible' && status.value === 'disconnected' && !manualDisconnect) {
-      console.log('[WS] Page became visible, attempting reconnect...')
-      forceReconnect()
+  /** Resolved when ws is OPEN, or immediately if already connected. */
+  function waitForConnected(): Promise<void> {
+    if (status.value === 'connected' && ws?.readyState === WebSocket.OPEN) {
+      return Promise.resolve()
     }
+    return new Promise<void>(resolve => {
+      pendingConnectedResolve = resolve
+    })
+  }
+
+  // ── Visibility change handler ───────────────────────────────────────────────
+  // NOTE: Detection.vue also listens to visibilitychange for its own
+  // wasAnalyzingBeforeHidden state. The WS handler below ONLY manages
+  // the connection layer; it does NOT stop/start analysis.
+  function handleVisibilityChange() {
+    if (document.visibilityState === 'hidden') {
+      console.log('[VIS] hidden')
+      // Do NOT disconnect here — let the socket stay alive if it can.
+      // The onclose handler will refuse to scheduleReconnect while hidden.
+      return
+    }
+
+    // visible
+    console.log('[VIS] visible')
+
+    // Check WS health
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      console.log('[VIS] ws healthy')
+      return
+    }
+    console.log('[VIS] ws unhealthy')
+
+    // Prevent double-reconnect if a recovery is already in flight
+    if (isRecovering) {
+      return
+    }
+
+    console.log('[VIS] reconnect requested')
+    isRecovering = true
+
+    forceReconnect()
+
+    // Clear the flag after a generous window (the onopen handler also clears it
+    // via pendingConnectedResolve, but this is a safety net in case connect()
+    // gets blocked by the duplicate guard and never fires onopen).
+    setTimeout(() => {
+      isRecovering = false
+    }, 10_000)
   }
 
   document.addEventListener('visibilitychange', handleVisibilityChange)
@@ -208,5 +287,5 @@ export function useWebSocket({ onMessage, onSendFailure }: UseWebSocketOptions):
     disconnect()
   })
 
-  return { status, sendFailCount, connect, disconnect, send, forceReconnect }
+  return { status, sendFailCount, connect, disconnect, send, forceReconnect, waitForConnected }
 }

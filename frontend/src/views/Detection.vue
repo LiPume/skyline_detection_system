@@ -184,7 +184,7 @@ const QUICK_CHIPS_LOCAL = [
 ]
 
 // ── WebSocket ──────────────────────────────────────────────────────────────────
-const { status: wsStatus, connect, disconnect, send } = useWebSocket({
+const { status: wsStatus, connect, disconnect, send, waitForConnected } = useWebSocket({
   onMessage(msg: ServerMessage) {
     if (msg.message_type === 'inference_result') {
       // ── Phase 5: 收到推理结果，计算结果返回节奏 ─────────────────────────
@@ -231,6 +231,49 @@ const { status: wsStatus, connect, disconnect, send } = useWebSocket({
 // Sync to global store → MainLayout header indicators
 watch(wsStatus,    v => { globalWsStatus.value = v }, { immediate: true })
 watch(isAnalyzing, v => { isGpuActive.value    = v }, { immediate: true })
+
+// ── Visibility-aware analysis recovery ────────────────────────────────────────
+// Records whether analysis was running when the page went to the background.
+// On return, reconnects the WS and resumes analysis only if it was running before.
+let wasAnalyzingBeforeHidden = false
+
+function handleVisibilityChange() {
+  if (document.visibilityState === 'hidden') {
+    console.log('[VIS] hidden')
+    wasAnalyzingBeforeHidden = isAnalyzing.value
+    return
+  }
+
+  // visible
+  console.log('[VIS] visible')
+
+  if (!wasAnalyzingBeforeHidden) {
+    console.log('[VIS] skip resume (was not analyzing)')
+    return
+  }
+
+  // was analyzing before going hidden — wait for WS, then resume
+  console.log('[VIS] reconnect requested')
+  waitForConnected()
+    .then(() => {
+      console.log('[VIS] reconnect success')
+      console.log('[VIS] resume analysis')
+      // Only resume if analysis state is still valid (user didn't manually stop)
+      if (isAnalyzing.value) return // already running (e.g. auto-restart)
+      if (analysisState.value !== 'paused' && analysisState.value !== 'standby') return
+      // Resume from paused or re-trigger analysis from scratch
+      if (hasVideo.value) {
+        resumeAnalysis()
+      }
+      wasAnalyzingBeforeHidden = false
+    })
+    .catch(() => {
+      console.log('[VIS] reconnect failed — skip resume')
+      wasAnalyzingBeforeHidden = false
+    })
+}
+
+document.addEventListener('visibilitychange', handleVisibilityChange)
 
 // ── Video stream ───────────────────────────────────────────────────────────────
 const selectedClassesArray = computed<string[]>(() => Array.from(selectedClasses.value))
@@ -462,6 +505,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   window.removeEventListener('keydown', handleKeydown)
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
   disconnect()
 })
 
