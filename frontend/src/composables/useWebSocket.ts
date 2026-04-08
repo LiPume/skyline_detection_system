@@ -98,18 +98,23 @@ export function useWebSocket({ onMessage, onSendFailure }: UseWebSocketOptions):
   }
 
   function connect() {
+    console.log('[WS] connect requested')
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+      console.log('[WS] duplicate connect blocked')
+      return
+    }
+
     manualDisconnect = false
     clearReconnectTimer()
     clearHeartbeatTimers()
-
-    if (ws && ws.readyState === WebSocket.OPEN) return
 
     status.value = 'connecting'
     ws = new WebSocket(WS_URL)
 
     ws.onopen = () => {
+      console.log('[WS] open')
       status.value = 'connected'
-      reconnectDelay = WS_BASE_RECONNECT_DELAY_MS // reset backoff on success
+      reconnectDelay = WS_BASE_RECONNECT_DELAY_MS
       startHeartbeat()
     }
 
@@ -135,6 +140,7 @@ export function useWebSocket({ onMessage, onSendFailure }: UseWebSocketOptions):
     }
 
     ws.onclose = () => {
+      console.log('[WS] close')
       status.value = 'disconnected'
       clearHeartbeatTimers()
       ws = null

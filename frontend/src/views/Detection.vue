@@ -462,6 +462,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   window.removeEventListener('keydown', handleKeydown)
+  disconnect()
 })
 
 // ── Derived display helpers ────────────────────────────────────────────────────
