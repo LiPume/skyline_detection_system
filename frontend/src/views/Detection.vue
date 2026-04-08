@@ -216,6 +216,9 @@ const { status: wsStatus, connect, disconnect, send, waitForConnected } = useWeb
         classCounts.value[d.class_name] = (classCounts.value[d.class_name] ?? 0) + 1
       }
 
+      // ── 背压 ACK：通知推流Composabel该帧已完成 ───────────────────────────────
+      ackFrame(r.frame_id)
+
       // ── 调试指标：前端消息处理耗时 ─────────────────────────────────────
       frontendRenderMs.value = performance.now() - resultNow
 
@@ -278,7 +281,7 @@ document.addEventListener('visibilitychange', handleVisibilityChange)
 // ── Video stream ───────────────────────────────────────────────────────────────
 const selectedClassesArray = computed<string[]>(() => Array.from(selectedClasses.value))
 
-const { sourceType, isPlaying, hasVideo, loadFile, selectWebcam, startPush, stopPush, resetVideo } =
+const { sourceType, isPlaying, hasVideo, loadFile, selectWebcam, startPush, stopPush, resetVideo, ackFrame } =
   useVideoStream({
     videoEl,
     systemLatency: endToEndLatencyMs,

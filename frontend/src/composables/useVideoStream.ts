@@ -54,6 +54,8 @@ interface UseVideoStreamReturn {
   stopPush:     () => void
   release:      () => void
   resetVideo:   () => void  // Reset to standby state (stops push, releases resources)
+  /** 背压 ACK：收到 inference_result 时调用，告知该帧已完成，允许发下一帧 */
+  ackFrame: (frameId: number) => void
 }
 
 export function useVideoStream({
@@ -74,16 +76,88 @@ export function useVideoStream({
   let currentBlobUrl: string | null = null
   let webcamStream:   MediaStream  | null = null
 
+  // ── 背压机制：最多 1 帧 in-flight ─────────────────────────────────────────
+  // pending：当前是否有帧正在等待 inference_result
+  // pendingFrameId：正在等待的那帧的 frame_id（用于日志和 ACK 对齐）
+  let pending       = false
+  let pendingFrameId = -1
+  let pendingTimerId: ReturnType<typeof setTimeout> | null = null
+  // 用于限频日志：上一次打印 PUSH 日志的时间戳（毫秒）
+  let lastLogTime   = 0
+  const LOG_INTERVAL_MS = 3000  // 相同日志至少间隔 3s，避免刷屏
+
+  /**
+   * 限频日志辅助。
+   * tag: 日志标签，msg: 日志正文。
+   * 仅当距上次打印同 tag 超过 LOG_INTERVAL_MS 时才输出。
+   */
+  function pushLog(tag: string, msg: string) {
+    const now = performance.now()
+    if (now - lastLogTime >= LOG_INTERVAL_MS) {
+      console.log(`[PUSH] ${tag} ${msg}`)
+      lastLogTime = now
+    }
+  }
+
+  /**
+   * 释放 pending 状态，允许发送下一帧。
+   * 由 Detection.vue 在收到 inference_result 时调用。
+   *
+   * 策略说明：
+   * - 按 frame_id 严格对齐：只对匹配的那帧 ACK（防止乱序结果误释放 pending）。
+   * - 若当前 pending 为 false 或 frame_id 不匹配，则忽略（防止串台）。
+   */
+  function ackFrame(frameId: number) {
+    if (!pending || pendingFrameId !== frameId) return
+    clearPending()
+    pushLog('frame ack', `id=${frameId}`)
+    // 立即触发下一帧（如果正在播放）
+    triggerTickIfPlaying()
+  }
+
+  function clearPending() {
+    pending       = false
+    pendingFrameId = -1
+    if (pendingTimerId !== null) {
+      clearTimeout(pendingTimerId)
+      pendingTimerId = null
+    }
+  }
+
   // Adaptive FPS control state
   let consecutiveHighLatency = 0
   let currentFpsLevel = 0  // 0=normal, 1=throttled
   const HIGH_LATENCY_THRESHOLD = 150  // ms - start throttling earlier
   const RECOVERY_THRESHOLD = 3  // consecutive low-latency frames to recover
   const LOW_LATENCY_RECOVERY = 100  // ms - latency to consider "recovered"
+  const PENDING_TIMEOUT_MS  = 1800  // pending 帧超时兜底（ms）
 
   // Dedicated offscreen canvas for frame extraction
   const offscreen = document.createElement('canvas')
   const offCtx    = offscreen.getContext('2d')!
+
+  /**
+   * 若正在播放且未在调度下一帧，则立即调度一次 tick（用于 pending 释放后立即续传）。
+   * 不会重置现有调度；只作为"补火"使用。
+   */
+  function triggerTickIfPlaying() {
+    if (!isPlaying.value || pushTimerId !== null) return
+    const fps = currentFpsLevel === 1 ? VIDEO_THROTTLED_FPS : VIDEO_TARGET_FPS
+    pushTimerId = setTimeout(tick, 0) as unknown as ReturnType<typeof setTimeout>
+  }
+
+  /**
+   * 背压超时兜底：防止后端异常导致 pending 永久不释放。
+   * 仅打印一次限频 warning（LOG_INTERVAL_MS 控制）。
+   */
+  function onPendingTimeout() {
+    pendingTimerId = null
+    const fid = pendingFrameId
+    pushLog('frame timeout', `id=${fid}`)
+    clearPending()
+    // timeout 后仍然触发下一帧（防止发送死锁）
+    triggerTickIfPlaying()
+  }
 
   // ── Frame capture ──────────────────────────────────────────────────────────
 
@@ -91,6 +165,12 @@ export function useVideoStream({
     const video = videoEl.value
     if (!video || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return
     if (video.videoWidth === 0 || video.videoHeight === 0) return
+
+    // ── 背压 A：检查 pending，不堆积 ─────────────────────────────────────
+    if (pending) {
+      pushLog('skip send', 'pending')
+      return
+    }
 
     // [临时测速] 开始编码计时
     const encodeStart = performance.now()
@@ -105,8 +185,16 @@ export function useVideoStream({
     const encodeMs = performance.now() - encodeStart
     onEncode?.(encodeMs)
 
+    const currentFrameId = frameId++
+    // ── 背压 B：发帧后立即置 pending 并启动超时计时 ──────────────────────
+    pending       = true
+    pendingFrameId = currentFrameId
+    pendingTimerId = setTimeout(onPendingTimeout, PENDING_TIMEOUT_MS) as unknown as ReturnType<typeof setTimeout>
+
+    pushLog('frame sent', `id=${currentFrameId}`)
+
     onFrame({
-      frame_id:     frameId++,
+      frame_id:     currentFrameId,
       timestamp:    Date.now() / 1000,
       image_base64: imageBase64,
       // Phase 3.1: Include model-related fields for dynamic configuration
@@ -125,6 +213,7 @@ export function useVideoStream({
     currentFpsLevel = 0
 
     function tick() {
+      pushTimerId = null  // 清掉自身引用（在 captureAndSend 内部已判断过 pending）
       captureAndSend()
 
       // Adaptive FPS: smart throttling based on latency trends
@@ -159,6 +248,7 @@ export function useVideoStream({
       pushTimerId = null
     }
     isPlaying.value = false
+    clearPending()
   }
 
   // ── Source management ──────────────────────────────────────────────────────
@@ -169,6 +259,7 @@ export function useVideoStream({
    */
   function resetVideo() {
     stopPush()
+    clearPending()
     consecutiveHighLatency = 0
     currentFpsLevel = 0
 
@@ -241,5 +332,5 @@ export function useVideoStream({
 
   onUnmounted(release)
 
-  return { sourceType, isPlaying, hasVideo, loadFile, selectWebcam, startPush, stopPush, release, resetVideo }
+  return { sourceType, isPlaying, hasVideo, loadFile, selectWebcam, startPush, stopPush, release, resetVideo, ackFrame }
 }
