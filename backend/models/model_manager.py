@@ -45,7 +45,7 @@ import time as _time
 from abc import ABC, abstractmethod
 from pathlib import Path
 from dataclasses import dataclass
-from typing import ClassVar, Optional
+from typing import Callable, ClassVar, Optional
 
 import cv2
 import numpy as np
@@ -133,8 +133,16 @@ class BaseDetector(ABC):
     def __init__(self) -> None:
         self._loaded = False
         self._load_lock = threading.Lock()
+        self._on_loaded_callback: "Callable[[], None] | None" = None
 
     # ── Public interface ──────────────────────────────────────────────────────
+
+    def set_on_loaded_callback(self, cb: "Callable[[], None]") -> None:
+        """Set a callback invoked synchronously after this detector's first cold load.
+        The callback runs inside the same thread that called load().
+        Safe for threading: only fires once per detector lifetime.
+        """
+        self._on_loaded_callback = cb
 
     def infer(
         self,
@@ -324,6 +332,11 @@ class PTDetector(BaseDetector):
             self._model = self._load_impl()
             self._loaded = True
             logger.info("[PTDetector] model_id=%s loaded, device=%s", self.model_id, self._device)
+            if _cold_load_callback is not None:
+                _cold_load_callback(self.model_id)
+            if self._on_loaded_callback is not None:
+                self._on_loaded_callback()
+                self._on_loaded_callback = None   # fire at most once
 
     def _load_impl(self) -> "YOLO_T":
         """Subclass-specific loading. Override in subclasses."""
@@ -667,6 +680,11 @@ class ONNXDetector(BaseDetector):
                     )
 
             self._loaded = True
+            if _cold_load_callback is not None:
+                _cold_load_callback(self.model_id)
+            if self._on_loaded_callback is not None:
+                self._on_loaded_callback()
+                self._on_loaded_callback = None   # fire at most once
 
     def _make_session(
         self,
@@ -995,6 +1013,16 @@ class ONNXDetector(BaseDetector):
 
 _RUNTIME_FACTORIES: dict[str, callable] = {}
 
+# Module-level cold-load hook (set by video_stream.py via set_cold_load_callback).
+# Called synchronously inside BaseDetector.load() while holding the detector's _load_lock.
+_cold_load_callback: "Callable[[str], None] | None" = None
+
+
+def set_cold_load_callback(cb: "Callable[[str], None]") -> None:
+    """Set the global cold-load callback (called from video_stream.py)."""
+    global _cold_load_callback
+    _cold_load_callback = cb
+
 
 def _register_runtime(runtime_type: str):
     """Decorator: register a factory function for a runtime_type."""
@@ -1053,6 +1081,7 @@ class ModelManager:
     Public API (used by inference.py):
         get_detector(model_id) → BaseDetector
         list_models() → list[str]
+        register_cold_load_callback(cb) → None
 
     Internal state:
         _cache:  model_id → BaseDetector  (lazy singleton per model)

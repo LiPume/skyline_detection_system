@@ -111,6 +111,8 @@ export interface InferenceResult {
    *   - PT: Ultralytics Results.speed["postprocess"]
    */
   postprocess_ms: number
+  /** 模型标识符，用于冷加载状态通知（Phase 5+） */
+  model_id: string
   detections: Detection[]
 }
 
@@ -120,7 +122,14 @@ export interface ErrorMessage {
   detail: string
 }
 
-export type ServerMessage = InferenceResult | ErrorMessage
+/** Server → Client: model cold-load lifecycle status (Phase 5+) */
+export interface ModelStatusMessage {
+  message_type: 'status'
+  phase: 'model_loading' | 'model_ready'
+  model_id: string
+}
+
+export type ServerMessage = InferenceResult | ErrorMessage | ModelStatusMessage
 
 // ── UI State ──────────────────────────────────────────────────────────────────
 

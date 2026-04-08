@@ -54,6 +54,9 @@ class InferenceResult(BaseModel):
         Total backend per-frame processing time (from _blocking_inference entry to return).
         Includes decode, inference, postprocess, and detector acquisition overhead —
         but NOT queue wait time. Always present.
+      model_id:
+        Canonical model identifier used for this frame. Used by the WS router to
+        emit model_ready status messages on cold-load completion.
     """
     message_type: Literal["inference_result"] = "inference_result"
     frame_id: int
@@ -62,6 +65,7 @@ class InferenceResult(BaseModel):
     session_ms:     float | None = None   # 纯推理耗时（PT 不可用 → None）
     preprocess_ms: float | None = None   # 预处理耗时（PT 不可用 → None）
     postprocess_ms: float | None = None  # 后处理耗时（PT 不可用 → None）
+    model_id: str = "YOLO-World-V2"       # 模型标识符（用于冷加载状态通知）
     detections: list[Detection]
 
 
@@ -70,3 +74,16 @@ class ErrorMessage(BaseModel):
     message_type: Literal["error"] = "error"
     error_code: int
     detail: str
+
+
+class StatusMessage(BaseModel):
+    """
+    Lightweight server → client status notification (no progress, no percentage).
+
+    Currently used for the model cold-load lifecycle:
+      phase="model_loading"  — first cold load has started (model_id is loading)
+      phase="model_ready"    — cold load completed (model_id is now cached)
+    """
+    message_type: Literal["status"] = "status"
+    phase: Literal["model_loading", "model_ready"]
+    model_id: str

@@ -143,6 +143,7 @@ def _blocking_inference(frame: VideoFrame) -> InferenceResult:
         session_ms=round(detector_result.session_ms, 3),
         preprocess_ms=round(detector_result.preprocess_ms, 3),
         postprocess_ms=round(detector_result.postprocess_ms, 3),
+        model_id=selected_model,
         detections=detector_result.detections,
     )
 

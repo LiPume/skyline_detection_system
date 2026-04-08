@@ -14,7 +14,7 @@ import logging
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
 
-from core.models import ErrorMessage, InferenceResult, VideoFrame
+from core.models import ErrorMessage, InferenceResult, StatusMessage, VideoFrame
 from core.inference import InferenceScheduler
 
 logger = logging.getLogger(__name__)
@@ -37,8 +37,45 @@ async def video_stream_endpoint(websocket: WebSocket) -> None:
     heartbeat_task: asyncio.Task | None = None
     last_pong_time: float = 0
 
+    # ── Phase 5+: model cold-load tracking ─────────────────────────────────
+    # Tracks which model_ids have already triggered a "model_loading" broadcast
+    # to avoid sending duplicate messages when the same model is re-requested.
+    # Access is single-threaded (only the scheduler's worker thread writes,
+    # only the WS event loop reads).
+    _cold_loaded_models: set[str] = set()
+
+    def _cold_load_callback(model_id: str) -> None:
+        """
+        Called from the inference worker thread via ModelManager callback.
+        Schedules a model_loading status message onto the WS event loop.
+        Uses run_coroutine_threadsafe (thread-safe) instead of create_task
+        to avoid get_running_loop() in the worker thread.
+        """
+        loop = asyncio.get_running_loop()
+        coro = websocket.send_text(
+            StatusMessage(phase="model_loading", model_id=model_id).model_dump_json()
+        )
+        asyncio.run_coroutine_threadsafe(coro, loop)
+
+    # Register the cold-load hook so ModelManager can notify us when a model
+    # is first instantiated.  This callback runs inside the worker thread,
+    # synchronously before the inference call returns.
+    from models.model_manager import set_cold_load_callback
+    set_cold_load_callback(_cold_load_callback)
+
     async def _send_result(result: InferenceResult) -> None:
         """Callback: push inference result back to this client."""
+        # ── Phase 5+: emit model_ready if this was a cold-load frame ──────────
+        model_id = result.model_id
+        if model_id not in _cold_loaded_models:
+            _cold_loaded_models.add(model_id)
+            try:
+                await websocket.send_text(
+                    StatusMessage(phase="model_ready", model_id=model_id).model_dump_json()
+                )
+            except Exception as exc:
+                logger.warning("Failed to send model_ready to %s: %s", client, exc)
+
         try:
             await websocket.send_text(result.model_dump_json())
         except Exception as exc:

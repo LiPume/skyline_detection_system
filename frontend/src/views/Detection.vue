@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
-import type { Detection, ServerMessage, InferenceResult } from '@/types/skyline'
+import type { Detection, ServerMessage, InferenceResult, ModelStatusMessage } from '@/types/skyline'
 import { useWebSocket }      from '@/composables/useWebSocket'
 import { useVideoStream }    from '@/composables/useVideoStream'
 import { useCanvasRenderer } from '@/composables/useCanvasRenderer'
@@ -16,13 +16,14 @@ const videoEl    = ref<HTMLVideoElement | null>(null)
 const fileInputEl = ref<HTMLInputElement | null>(null)
 
 // ── Analysis state machine ─────────────────────────────────────────────────────
-type AnalysisState = 'standby' | 'ready' | 'analyzing' | 'paused' | 'finished'
+// States: standby → ready → loading_model → analyzing → paused → finished
+type AnalysisState = 'standby' | 'ready' | 'loading_model' | 'analyzing' | 'paused' | 'finished'
 const analysisState = ref<AnalysisState>('standby')
 
-const isAnalyzing = computed(() => analysisState.value === 'analyzing')
-const isPaused    = computed(() => analysisState.value === 'paused')
-const canExecute  = computed(() => analysisState.value === 'ready' || analysisState.value === 'finished')
-const isLocked    = computed(() => analysisState.value === 'analyzing' || analysisState.value === 'paused')
+const isAnalyzing       = computed(() => analysisState.value === 'analyzing' || analysisState.value === 'loading_model')
+const isPaused          = computed(() => analysisState.value === 'paused')
+const canExecute        = computed(() => analysisState.value === 'ready' || analysisState.value === 'finished')
+const isLocked          = computed(() => analysisState.value === 'analyzing' || analysisState.value === 'paused' || analysisState.value === 'loading_model')
 
 // ── Pause dialog state ─────────────────────────────────────────────────────────
 const showPauseDialog = ref(false)
@@ -35,6 +36,36 @@ function showToast(text: string, type: Toast['type'] = 'error', ms = 4000) {
   const id = toastSeq++
   toasts.value.push({ id, type, text })
   setTimeout(() => { toasts.value = toasts.value.filter(t => t.id !== id) }, ms)
+}
+
+// ── Model loading HUD (Phase 5+) ─────────────────────────────────────────────────
+// Lightweight status hint shown only during the first cold-load of a model.
+// Fast loads (< 300ms) skip the visible phase entirely.
+const modelLoadingHint = ref<string | null>(null)   // null = not shown
+let _modelHintTimer: ReturnType<typeof setTimeout> | null = null
+
+function clearModelHintTimer() {
+  if (_modelHintTimer !== null) {
+    clearTimeout(_modelHintTimer)
+    _modelHintTimer = null
+  }
+}
+
+function showModelLoadingHint() {
+  clearModelHintTimer()
+  modelLoadingHint.value = '首次加载模型中…'
+  // If still loading after 1 s, show a more informative message
+  _modelHintTimer = setTimeout(() => {
+    if (modelLoadingHint.value !== null) {
+      modelLoadingHint.value = '模型预热中，首次加载可能需要几秒'
+    }
+  }, 1000)
+}
+
+function showModelReadyHint() {
+  clearModelHintTimer()
+  modelLoadingHint.value = '模型已就绪'
+  setTimeout(() => { modelLoadingHint.value = null }, 900)
 }
 
 // ── Telemetry ──────────────────────────────────────────────────────────────────
@@ -224,6 +255,16 @@ const { status: wsStatus, connect, disconnect, send, waitForConnected } = useWeb
 
     } else if (msg.message_type === 'error') {
       showToast(msg.detail, 'error')
+    } else if (msg.message_type === 'status') {
+      const s = msg as ModelStatusMessage
+      if (s.phase === 'model_loading') {
+        showModelLoadingHint()
+      } else if (s.phase === 'model_ready') {
+        showModelReadyHint()
+        if (analysisState.value === 'loading_model') {
+          analysisState.value = 'analyzing'
+        }
+      }
     }
   },
   onSendFailure() {
@@ -359,7 +400,9 @@ function startAnalysis() {
   analysisStartTime.value = Date.now()
   video.play()
   startPush()
-  analysisState.value = 'analyzing'
+  // 先进入 loading_model，等后端 model_ready 才切成 analyzing
+  showModelLoadingHint()
+  analysisState.value = 'loading_model'
 }
 
 function stopAnalysis() {
@@ -371,6 +414,8 @@ function stopAnalysis() {
     analysisStartTime.value = null
   }
   analysisState.value = 'finished'
+  clearModelHintTimer()
+  modelLoadingHint.value = null
   autoSave()
 }
 
@@ -517,11 +562,12 @@ onUnmounted(() => {
 const latencyOk = computed(() => endToEndLatencyMs.value !== null && endToEndLatencyMs.value <= LATENCY_THROTTLE_THRESHOLD_MS)
 
 const stateInfo = computed(() => ({
-  standby:   { label: 'STANDBY',   color: 'text-slate-500',   bg: 'bg-slate-500/10  border-slate-600/40' },
-  ready:     { label: 'ARMED',     color: 'text-emerald-400', bg: 'bg-emerald-500/10 border-emerald-500/40' },
-  analyzing: { label: 'ANALYZING', color: 'text-blue-400',    bg: 'bg-blue-500/10   border-blue-500/40' },
-  paused:    { label: 'PAUSED',   color: 'text-amber-400',   bg: 'bg-amber-500/10  border-amber-500/40' },
-  finished:  { label: 'COMPLETE', color: 'text-cyan-400',    bg: 'bg-cyan-500/10  border-cyan-500/40' },
+  standby:      { label: 'STANDBY',    color: 'text-slate-500',   bg: 'bg-slate-500/10   border-slate-600/40' },
+  ready:        { label: 'ARMED',      color: 'text-emerald-400', bg: 'bg-emerald-500/10 border-emerald-500/40' },
+  loading_model:{ label: 'WARMING UP', color: 'text-amber-400',   bg: 'bg-amber-500/10   border-amber-500/40' },
+  analyzing:    { label: 'ANALYZING',  color: 'text-blue-400',    bg: 'bg-blue-500/10    border-blue-500/40' },
+  paused:       { label: 'PAUSED',    color: 'text-amber-400',   bg: 'bg-amber-500/10   border-amber-500/40' },
+  finished:     { label: 'COMPLETE',  color: 'text-cyan-400',    bg: 'bg-cyan-500/10   border-cyan-500/40' },
 }[analysisState.value]))
 
 // ── Video Reset ─────────────────────────────────────────────────────────────────
@@ -532,6 +578,8 @@ function resetToStandby() {
   resetVideo()
   currentDetections.value = []
   resetStats()
+  clearModelHintTimer()
+  modelLoadingHint.value = null
   analysisState.value = 'standby'
 }
 </script>
@@ -715,10 +763,28 @@ function resetToStandby() {
                    text-xs font-mono font-medium tracking-widest"
             :class="[stateInfo.color, stateInfo.bg]"
           >
-            <span v-if="isAnalyzing" class="w-1.5 h-1.5 rounded-full bg-current animate-pulse"></span>
+            <span v-if="analysisState === 'loading_model' || isAnalyzing" class="w-1.5 h-1.5 rounded-full bg-current animate-pulse"></span>
             {{ stateInfo.label }}
           </span>
         </div>
+
+        <!-- Model cold-load HUD (Phase 5+) — centered, prominent -->
+        <Transition name="model-hint">
+          <div
+            v-if="modelLoadingHint !== null"
+            class="absolute inset-0 flex items-center justify-center pointer-events-none"
+          >
+            <div class="flex items-center gap-3 px-5 py-3 rounded-2xl
+                        bg-slate-950/80 border border-blue-500/50 backdrop-blur-md
+                        text-blue-200 text-sm font-medium shadow-[0_0_24px_rgba(59,130,246,0.15)]">
+              <svg class="w-4 h-4 animate-spin flex-shrink-0" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+              </svg>
+              {{ modelLoadingHint }}
+            </div>
+          </div>
+        </Transition>
       </div>
     </div>
 
@@ -1329,4 +1395,9 @@ function resetToStandby() {
 
 .fade-enter-active, .fade-leave-active { transition: opacity 0.3s ease; }
 .fade-enter-from, .fade-leave-to       { opacity: 0; }
+
+.model-hint-enter-active { transition: opacity 0.25s ease, transform 0.25s ease; }
+.model-hint-leave-active { transition: opacity 0.8s ease, transform 0.8s ease; }
+.model-hint-enter-from   { opacity: 0; transform: translateX(-50%) translateY(-6px); }
+.model-hint-leave-to     { opacity: 0; transform: translateX(-50%) translateY(-2px); }
 </style>
