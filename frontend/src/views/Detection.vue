@@ -215,7 +215,8 @@ const QUICK_CHIPS_LOCAL = [
 ]
 
 // ── WebSocket ──────────────────────────────────────────────────────────────────
-const { status: wsStatus, connect, disconnect, send, waitForConnected } = useWebSocket({
+// Expose connect for the onMounted health check below
+const { status: wsStatus, connect, disconnect, send, waitForConnected, forceReconnect } = useWebSocket({
   onMessage(msg: ServerMessage) {
     if (msg.message_type === 'inference_result') {
       // ── Phase 5: 收到推理结果，计算结果返回节奏 ─────────────────────────
@@ -514,8 +515,19 @@ async function onSelectWebcam() {
 onMounted(async () => {
   // Phase 3.1: Initialize model configuration
   await initModelConfig()
-  
-  connect()
+
+  // ── [INIT] Detection page WS health check ─────────────────────────────────
+  // On first mount, if there is no WS or the WS is stuck in connecting/disconnected,
+  // trigger a controlled reconnect so the header indicator reaches ONLINE promptly.
+  // This is idempotent — connect() guards against duplicate sockets.
+  if (wsStatus.value === 'connected') {
+    console.log('[INIT] detection mount health check — ws healthy')
+  } else {
+    console.log('[INIT] detection mount health check — ws unhealthy, reconnect requested')
+    connect()
+  }
+  // ────────────────────────────────────────────────────────────────────────────
+
   startRendering()
 
   // Set canvas size immediately (don't wait for ResizeObserver's first callback)

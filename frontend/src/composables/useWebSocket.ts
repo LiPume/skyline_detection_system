@@ -65,6 +65,23 @@ export function useWebSocket({ onMessage, onSendFailure }: UseWebSocketOptions):
   // Allows callers (e.g. Detection.vue) to await connection.
   let pendingConnectedResolve: (() => void) | null = null
 
+  // ── Connecting timeout guard ─────────────────────────────────────────────────
+  // Guard against the socket hanging in CONNECTING forever (e.g. server unreachable).
+  // A single one-shot reconnect fires if onopen hasn't fired within CONNECTING_TIMEOUT_MS.
+  let connectingTimer: ReturnType<typeof setTimeout> | null = null
+  const CONNECTING_TIMEOUT_MS = 3_000
+
+  // Set to true while we are mid-reconnect triggered by the connecting timeout.
+  // onclose checks this to avoid nulling the new socket created by the reconnect.
+  let isReconnecting = false
+
+  function clearConnectingTimer() {
+    if (connectingTimer !== null) {
+      clearTimeout(connectingTimer)
+      connectingTimer = null
+    }
+  }
+
   function clearReconnectTimer() {
     if (reconnectTimer !== null) {
       clearTimeout(reconnectTimer)
@@ -120,11 +137,30 @@ export function useWebSocket({ onMessage, onSendFailure }: UseWebSocketOptions):
     manualDisconnect = false
     clearReconnectTimer()
     clearHeartbeatTimers()
+    clearConnectingTimer()
 
     status.value = 'connecting'
     ws = new WebSocket(WS_URL)
 
+    // Connecting timeout guard: fire a single reconnect if onopen never fires
+    connectingTimer = setTimeout(() => {
+      // Only fire if this specific socket is still stuck in CONNECTING
+      if (ws && ws.readyState === WebSocket.CONNECTING) {
+        console.log('[INIT] connecting timeout')
+        isReconnecting = true
+        ws.close()
+        status.value = 'disconnected'
+        // Single one-shot reconnect — does NOT arm the exponential-backoff loop
+        if (document.visibilityState !== 'hidden') {
+          reconnectDelay = WS_BASE_RECONNECT_DELAY_MS
+          connect()
+        }
+      }
+    }, CONNECTING_TIMEOUT_MS)
+
     ws.onopen = () => {
+      clearConnectingTimer()
+      isReconnecting = false
       console.log('[WS] open')
       status.value = 'connected'
       reconnectDelay = WS_BASE_RECONNECT_DELAY_MS
@@ -161,7 +197,13 @@ export function useWebSocket({ onMessage, onSendFailure }: UseWebSocketOptions):
       console.log('[WS] close')
       status.value = 'disconnected'
       clearHeartbeatTimers()
-      ws = null
+      clearConnectingTimer()  // prevent a stale timeout from closing a newer socket
+      // Don't null ws while a reconnect triggered by connecting-timeout is in flight;
+      // the timeout callback holds the old ws ref and will clean up after itself.
+      if (!isReconnecting) {
+        ws = null
+      }
+      isReconnecting = false
 
       // Clear pending connected promise so callers don't hang forever
       if (pendingConnectedResolve) {
@@ -199,6 +241,7 @@ export function useWebSocket({ onMessage, onSendFailure }: UseWebSocketOptions):
     manualDisconnect = true
     clearReconnectTimer()
     clearHeartbeatTimers()
+    clearConnectingTimer()
     ws?.close()
     ws = null
     status.value = 'disconnected'
@@ -212,6 +255,8 @@ export function useWebSocket({ onMessage, onSendFailure }: UseWebSocketOptions):
     manualDisconnect = false
     clearReconnectTimer()
     clearHeartbeatTimers()
+    clearConnectingTimer()
+    isReconnecting = false
     ws?.close()
     ws = null
     status.value = 'disconnected'
