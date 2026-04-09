@@ -164,9 +164,10 @@ export function useModelConfig(defaultModelId: string = 'YOLO-World-V2') {
     }
   }
 
-  /** Select a model and fetch its capabilities */
-  async function selectModel(modelId: string) {
+  /** Select a model and fetch its capabilities, optionally executing a callback after load */
+  async function selectModel(modelId: string, postLoadAction?: () => void) {
     if (modelId === selectedModelId.value && currentCapabilities.value) {
+      postLoadAction?.()
       return // Already selected, no need to refetch
     }
     
@@ -175,6 +176,7 @@ export function useModelConfig(defaultModelId: string = 'YOLO-World-V2') {
     
     // Handle state cleanup when switching models
     handleModelSwitch()
+    postLoadAction?.()
   }
 
   /** Handle state cleanup when switching between models */

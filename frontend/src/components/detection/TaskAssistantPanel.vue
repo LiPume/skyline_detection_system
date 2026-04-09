@@ -8,6 +8,8 @@ import { ref, onUnmounted } from 'vue'
 import { parseTask } from '@/api/agent'
 import type { AgentRecommendation } from '@/types/skyline'
 
+const emit = defineEmits<{ 'apply-recommendation': [rec: AgentRecommendation] }>()
+
 // ── State ─────────────────────────────────────────────────────────────────────
 
 const userInput       = ref('')
@@ -191,6 +193,26 @@ function confidenceBg(c: string): string {
         <div v-if="result.reason" class="mt-2 px-2.5 py-2 rounded-lg" :class="confidenceBg(result.confidence)">
           <p class="text-xs text-slate-400 leading-relaxed">{{ result.reason }}</p>
         </div>
+
+        <!-- 应用按钮 -->
+        <button
+          class="mt-3 w-full py-2 rounded-lg text-xs font-semibold tracking-wide
+                 flex items-center justify-center gap-2 transition-all duration-150
+                 bg-emerald-600/20 border border-emerald-500/50 text-emerald-400
+                 hover:bg-emerald-600/30 hover:border-emerald-500/70 active:scale-[0.98]"
+          @click="emit('apply-recommendation', result)"
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="20,6 9,17 4,12"/>
+          </svg>
+          应用到当前配置
+        </button>
+
+        <!-- 应用成功提示 -->
+        <p class="mt-2 text-center text-xs text-emerald-400/80">
+          已将推荐方案写入当前配置，请确认后启动分析。
+        </p>
+
       </div>
 
     </div>

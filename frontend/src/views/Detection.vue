@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
-import type { Detection, ServerMessage, InferenceResult, ModelStatusMessage } from '@/types/skyline'
+import type { Detection, ServerMessage, InferenceResult, ModelStatusMessage, AgentRecommendation } from '@/types/skyline'
 import { useWebSocket }      from '@/composables/useWebSocket'
 import { useVideoStream }    from '@/composables/useVideoStream'
 import { useCanvasRenderer } from '@/composables/useCanvasRenderer'
@@ -598,6 +598,25 @@ function resetToStandby() {
   modelLoadingHint.value = null
   analysisState.value = 'standby'
 }
+
+// ── Task Assistant recommendation handler ──────────────────────────────────────
+
+async function handleApplyRecommendation(rec: AgentRecommendation) {
+  // 先切模型，capabilities 加载完成后，在 postLoadAction 中写入类别配置
+  await selectModel(rec.recommended_model_id, () => {
+    if (isOpenVocabModel.value) {
+      // 开放词汇模型：直接覆盖 promptInput
+      promptInput.value = rec.target_classes.join(', ')
+    } else if (isClosedSetModel.value) {
+      // 闭集模型：清空现有选中，按推荐类别覆盖（仅保留推荐中存在的）
+      const recommendedSet = new Set(rec.target_classes)
+      // 仅保留推荐列表中存在的已支持类别
+      const valid = currentCapabilities.value?.supported_classes ?? []
+      const matched = valid.filter(cls => recommendedSet.has(cls))
+      selectedClasses.value = new Set(matched)
+    }
+  })
+}
 </script>
 
 <template>
@@ -816,7 +835,7 @@ function resetToStandby() {
       <div class="flex-1 overflow-y-auto px-5 py-4 space-y-5">
 
         <!-- ══ Task Assistant (Phase 1 Agent) ══════════════════════════════════════ -->
-        <TaskAssistantPanel />
+        <TaskAssistantPanel @apply-recommendation="handleApplyRecommendation" />
 
         <!-- Video source -->
         <div>
