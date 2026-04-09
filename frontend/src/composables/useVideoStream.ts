@@ -165,9 +165,9 @@ export function useVideoStream({
   // Adaptive FPS control state
   let consecutiveHighLatency = 0
   let currentFpsLevel = 0  // 0=normal, 1=throttled
-  const HIGH_LATENCY_THRESHOLD = 150  // ms - start throttling earlier
+  const HIGH_LATENCY_THRESHOLD = 250  // ms - start throttling earlier
   const RECOVERY_THRESHOLD = 3  // consecutive low-latency frames to recover
-  const LOW_LATENCY_RECOVERY = 100  // ms - latency to consider "recovered"
+  const LOW_LATENCY_RECOVERY = 180  // ms - latency to consider "recovered"
   const PENDING_TIMEOUT_MS  = 1800  // pending 帧超时兜底（ms）
 
   // Dedicated offscreen canvas for frame extraction

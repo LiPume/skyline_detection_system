@@ -150,3 +150,18 @@ export const CLASS_COLORS: Record<string, string> = {
   pedestrian: '#ff3366',
 }
 export const DEFAULT_DETECTION_COLOR = '#00ff88'
+
+// ════════════════════════════════════════════════════════════════════════════════
+// AGENT / TASK PARSING (Phase 1)
+// ════════════════════════════════════════════════════════════════════════════════
+
+export type AgentConfidence = 'high' | 'medium' | 'low'
+
+export interface AgentRecommendation {
+  intent: string
+  recommended_model_id: string
+  target_classes: string[]
+  report_required: boolean
+  reason: string
+  confidence: AgentConfidence
+}

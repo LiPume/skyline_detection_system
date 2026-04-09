@@ -9,6 +9,12 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKEND_DIR="$SCRIPT_DIR/backend"
 
+# 激活 skyline conda 环境（确保 uvicorn、httpx 等可用）
+CONDA_ENV_DIR="$HOME/miniconda3/envs/skyline"
+if [ -d "$CONDA_ENV_DIR" ]; then
+    export PATH="$CONDA_ENV_DIR/bin:$PATH"
+fi
+
 echo "▶  切换到 backend 目录: $BACKEND_DIR"
 cd "$BACKEND_DIR"
 

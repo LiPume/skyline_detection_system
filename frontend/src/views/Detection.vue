@@ -8,6 +8,7 @@ import { useModelConfig } from '@/composables/useModelConfig'
 import { wsStatus as globalWsStatus, isGpuActive } from '@/store/systemStatus'
 import { LATENCY_THROTTLE_THRESHOLD_MS, LATENCY_BAR_MAX_MS } from '@/config'
 import { saveDetection }     from '@/api/history'
+import TaskAssistantPanel from '@/components/detection/TaskAssistantPanel.vue'
 
 // ── DOM refs ───────────────────────────────────────────────────────────────────
 const canvasEl   = ref<HTMLCanvasElement | null>(null)
@@ -813,6 +814,9 @@ function resetToStandby() {
       </div>
 
       <div class="flex-1 overflow-y-auto px-5 py-4 space-y-5">
+
+        <!-- ══ Task Assistant (Phase 1 Agent) ══════════════════════════════════════ -->
+        <TaskAssistantPanel />
 
         <!-- Video source -->
         <div>
