@@ -1,6 +1,7 @@
 # 前端页面样式描述（Skyline）
 
 > 依据当前 `skyline/frontend/src` 的 `Vue/TypeScript` + `Tailwind CSS` 实现整理
+> 代码版本对应 2026-04-09，Phase 5+ 后端已完整提供 timing 字段，前端性能面板均为真实数据
 
 ---
 
@@ -86,19 +87,27 @@
   - 右侧"AI 控制台"（`aside`）：宽度固定 `w-80 flex-shrink-0`，背景 `bg-slate-900`，分隔线 `border-l border-slate-800`
 
 ### 4.2 状态机与浮层体系
-- 分析状态机（5 状态）：`standby | ready | analyzing | paused | finished`
+- 分析状态机（**6 状态**）：`standby | ready | loading_model | analyzing | paused | finished`
+- `standby`：画布无视频源，显示 standby 背景动画
+- `ready`：视频已加载但未开始分析（视频首帧显示在画布）
+- `loading_model`：首次冷加载模型中（点击"启动实时分析"后短暂状态，直到收到后端 `model_ready` 才切换到 `analyzing`）
+- `analyzing`：实时分析中（画布显示 REC 指示灯）
+- `paused`：分析已暂停，显示暂停统计模态框
+- `finished`：本地视频播放完毕或手动停止，显示最终结果与保存状态
 - 状态 Pill（左上角）：
   - standby：`text-slate-500 bg-slate-500/10 border-slate-600/40`，标签 "STANDBY"
   - ready：`text-emerald-400 bg-emerald-500/10 border-emerald-500/40`，标签 "ARMED"
+  - loading_model：`text-amber-400 bg-amber-500/10 border-amber-500/40`，标签 "WARMING UP"
   - analyzing：`text-blue-400 bg-blue-500/10 border-blue-500/40`（增加 `animate-pulse` 圆点），标签 "ANALYZING"
   - paused：`text-amber-400 bg-amber-500/10 border-amber-500/40`，标签 "PAUSED"
   - finished：`text-cyan-400 bg-cyan-500/10 border-cyan-500/40`，标签 "COMPLETE"
-- READY/FINISHED/PAUSED 浮层（画布底部左侧）：
+- READY/FINISHED/PAUSED/LOADING_MODEL 浮层（画布底部左侧）：
   - READY：`bg-slate-950/85 border-emerald-500/30 backdrop-blur`，圆点 `animate-pulse`
+  - LOADING_MODEL：居中大浮层（画布覆盖），含模型加载提示文字
   - PAUSED：`bg-slate-950/85 border-amber-500/30 backdrop-blur`
-  - FINISHED：`bg-slate-950/85 border-cyan-500/30 backdrop-blur`，显示保存状态
+  - FINISHED：`bg-slate-950/85 border-cyan-500/30 backdrop-blur`，显示保存状态（saving/saved/error）
 - WebSocket 重连提示：`bg-amber-950/85 border-amber-700/60`，带 `animate-pulse` 小圆点
-- 检测结果计数角标（右上角）：`bg-slate-950/85 border border-blue-500/40`，`text-blue-400 text-xs font-mono`
+- 检测结果计数角标（右上角，分析中且有检测时）：`bg-slate-950/85 border border-blue-500/40`，`text-blue-400 text-xs font-mono`
 - Toast 通知栈（顶部居中）：
   - 容器：`absolute top-4 left-1/2 -translate-x-1/2 z-50`，并设置 `min-width/max-width`
   - Toast 样式：`rounded-xl border text-sm backdrop-blur shadow-xl`
@@ -106,6 +115,22 @@
   - warn：`bg-amber-950/90 border-amber-700/70 text-amber-300`
   - success：`bg-emerald-950/90 border-emerald-700/70 text-emerald-300`
   - 动画：`TransitionGroup` 实现进入/离开动画
+
+### 4.2.1 模型冷加载提示（Phase 5+）
+
+画布居中显示淡入浮层（`model-hint` transition）：
+
+- 首次点击"启动实时分析"后进入 `loading_model` 状态，显示"首次加载模型中…"
+- 若 1 秒后仍处于加载状态，文字变为"模型预热中，首次加载可能需要几秒"
+- 收到后端 `StatusMessage(phase="model_ready")` 后，文字变为"模型已就绪"，0.9 秒后自动消失
+- 若期间前端切到其他页面，提示保持不消失（由后端控制模型状态）
+
+### 4.2.2 模型就绪后的状态切换逻辑
+
+```
+startAnalysis() → 状态 = loading_model → 提示"首次加载模型中…"
+收到 model_ready → 状态 = analyzing → 提示"模型已就绪" → 900ms 后隐藏
+```
 
 ### 4.3 左侧视觉舞台（Canvas + 拖拽区）
 - Canvas：
@@ -159,7 +184,57 @@
   - 两个并排按钮：`flex gap-2`，每个 `flex-1 py-2 rounded-lg border text-xs font-medium`
   - hover 的强调色分别落在红/蓝语义上，并由 `disabled:opacity-35` 控制禁用反馈
 
-### 4.5 暂停对话框（Modal）
+### 4.5 右侧 AI 控制台（表单/按钮/指标）
+
+控制台标题区：
+- `px-5 py-4 border-b border-slate-800`
+- 标题：`text-sm font-semibold text-white tracking-wide`
+- 说明：`text-xs text-slate-500 mt-0.5`
+
+内容区使用纵向间距：`flex-1 overflow-y-auto px-5 py-4 space-y-5`
+
+视频来源选择：
+- 本地文件/实时摄像 两个按钮
+- 选中态：`bg-blue-600/20 border-blue-500/50 text-blue-400`
+- 未选中：`bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-600`
+- 已加载视频指示：`bg-emerald-500/8 border border-emerald-500/20 text-emerald-400`（显示"视频已就绪"，带"更换"/"重置"按钮）
+
+模型信息横幅（根据模型类型变化）：
+- 开放词汇模型：`bg-blue-500/10 border-blue-500/30`，标签 "开放词汇"
+- 固定类别模型：`bg-amber-500/10 border-amber-500/30`，标签 "固定类别"
+
+表单输入与卡片元素：
+- `select`/`textarea` 默认底色 `bg-slate-800`，边框 `border-slate-700`，圆角 `rounded-lg`
+- 聚焦态：`focus:border-blue-500 focus:ring-1 focus:ring-blue-500/30`
+- 禁用态：`disabled:opacity-40 disabled:cursor-not-allowed`
+
+开放词汇模型配置：
+- 快捷类别芯片：`px-2.5 py-1 rounded-full border text-xs`
+- 选中：`border-blue-500/50 bg-blue-500/10 text-blue-400`
+- Prompt 输入框：`textarea` + `font-mono`，显示解析后的类别 chip
+
+固定类别模型配置：
+- 提示横幅：`bg-amber-500/5 border border-amber-500/20 text-amber-400`
+- 类别网格：`grid grid-cols-2 gap-1`，支持全选/清空
+- 选中态：`bg-blue-500/20 border border-blue-500/40 text-blue-400`
+
+CTA 按钮（底部主要操作区）：
+- "启动实时分析" / "重新启动分析"：可执行时为渐变高亮 `bg-gradient-to-r from-blue-600 to-blue-500` + `shadow-lg`
+- 不可执行/禁用：`bg-slate-800 border border-slate-700 text-slate-500 cursor-not-allowed`
+- "暂停分析"：危险语义 `bg-amber-600/20 border border-amber-600/40 text-amber-400`
+- "继续播放"：`bg-emerald-600/20 border border-emerald-600/40 text-emerald-400`
+- "停止分析"：危险语义 `bg-red-950/60 border border-red-700/60 text-red-400`
+- "暂停"和"继续播放"并排显示（grid col-span-2）
+
+性能监控卡片：
+- 延迟卡片：`bg-slate-800/60 rounded-lg p-3 border border-slate-700/50`，带进度条颜色指示（绿色 ≤ LATENCY_THROTTLE_THRESHOLD_MS，否则红色）
+- 推理耗时与吞吐量：`grid grid-cols-4 gap-2`
+
+网络控制：
+- 两个并排按钮：`flex gap-2`，每个 `flex-1 py-2 rounded-lg border text-xs font-medium`
+- hover 的强调色分别落在红/蓝语义上，并由 `disabled:opacity-35` 控制禁用反馈
+
+### 4.6 暂停对话框（Modal）
 - 使用 `<Teleport to="body">` 渲染
 - 遮罩：`bg-black/80 backdrop-blur-sm`
 - 内容：`max-w-md mx-4 bg-slate-900 rounded-2xl border border-slate-700`
@@ -324,10 +399,13 @@
   - 备注文本：对应语义色边框/背景
 
 ### 7.6 当前状态（数据层）
-- **训练数据**：来自 `yolo_car_results.csv` 的 300 epochs 硬编码数据
-- **评测数据**：本地 Mock 数据（`summaryMetrics`、`evaluationResult`、`classMetrics`）
-- PR 曲线：使用静态图片 `/metrics/pr_curve.png`，带错误处理 fallback
-- 无真实 API 调用，无评测管道连接
+
+**所有数据均为硬编码内联 mock 数据**，无任何真实 API 调用：
+
+- 训练历史：`trainHistory` ref 包含 25 条 epoch 关键节点数据（1/2/3/.../300），来自 `yolo_car_results.csv` 解析结果
+- 评测数据：`summaryMetrics`、`evaluationResult`、`classMetrics` 均为 Vue ref 内的硬编码值
+- PR 曲线：使用静态图片 `/metrics/pr_curve.png`，带 `@error` fallback 占位符
+- 无训练数据存储管道，无评测结果回填机制，无真实 API 连接
 
 ---
 
@@ -355,7 +433,7 @@
 
 ---
 
-## 9) 性能指标体系（Phase 5）
+## 9) 性能指标体系（Phase 5+）
 
 ### 9.1 前端性能指标展示总览
 
@@ -363,9 +441,9 @@
 
 | 层级 | 分类 | 展示性质 | 示例 |
 |------|------|----------|------|
-| 第1层 | 主展示指标 | 正式展示，比赛/答辩必须保留 | 后端处理耗时、纯推理耗时 |
-| 第2层 | 工程 / 实时指标 | 正式展示，系统实时展示建议保留 | 发送节奏、结果返回节奏 |
-| 第3层 | 链路诊断指标 | 调试辅助，开发/排查阶段保留 | 前端编码耗时、链路额外开销 |
+| 第1层 | 主展示指标 | 正式展示，比赛/答辩必须保留 | 后端处理耗时、纯推理耗时、后端处理 FPS、纯推理 FPS |
+| 第2层 | 工程 / 实时指标 | 正式展示，系统实时展示建议保留 | 发送节奏、结果返回节奏、算法全流程耗时/ FPS |
+| 第3层 | 链路诊断指标 | 调试辅助，开发/排查阶段保留 | 前端编码耗时、前端消息处理、链路额外开销、Pending 诊断 |
 
 ### 9.2 前端当前使用的统一字段协议
 
@@ -375,8 +453,11 @@
 |--------|------|------|
 | `inference_time_ms` | `number` | 后端单帧总处理耗时（_blocking_inference 整体） |
 | `session_ms` | `number` | 纯模型 forward 耗时（ONNX: session.run / PT: Results.speed["inference"]） |
-| `preprocess_ms` | `number` | 预处理耗时（ONNX: _preprocess / PT: Results.speed["preprocess"]） |
+| `preprocess_ms` | `number` | 预处理耗时（ONNX: decode_ms + _preprocess / PT: decode_ms + Results.speed["preprocess"]） |
 | `postprocess_ms` | `number` | 后处理耗时（ONNX: _postprocess / PT: Results.speed["postprocess"]） |
+| `model_id` | `string` | 本次推理使用的模型 ID（Phase 5+ 冷加载状态通知用） |
+
+> **Phase 5+ 变化**：后端已完整实现所有 timing 字段（inference_time_ms / session_ms / preprocess_ms / postprocess_ms / model_id），前端不再显示 "--" 占位，所有指标均为真实数据。
 
 #### 前端派生字段
 
@@ -386,7 +467,7 @@
 | `sessionMs` | `ref<number\|null>` | `= session_ms` | 纯推理耗时（直接赋值） |
 | `preprocessMs` | `ref<number\|null>` | `= preprocess_ms` | 预处理耗时（直接赋值） |
 | `postprocessMs` | `ref<number\|null>` | `= postprocess_ms` | 后处理耗时（直接赋值） |
-| `algoProcessMs` | `computed<number\|null>` | `preprocessMs + sessionMs + postprocessMs` | 算法全流程耗时（三段之和） |
+| `algoProcessMs` | `computed<number\|null>` | `preprocessMs + sessionMs + postprocessMs` | 算法全流程耗时（三段之和，三个值均非 null 时计算） |
 | `fpsBackend` | `computed<number\|null>` | `1000 / backendProcessMs` | 后端处理 FPS |
 | `fpsInfer` | `computed<number\|null>` | `1000 / sessionMs` | 纯推理 FPS |
 | `fpsAlgo` | `computed<number\|null>` | `1000 / algoProcessMs` | 算法全流程 FPS |
@@ -395,9 +476,11 @@
 | `resultIntervalMs` | `ref<number\|null>` | 相邻两次 inference_result 到达间隔 | 结果返回节奏 |
 | `fpsResult` | `computed<number\|null>` | `1000 / resultIntervalMs` | 结果返回 FPS |
 | `endToEndLatencyMs` | `ref<number\|null>` | `(Date.now() / 1000 - timestamp) * 1000` | 端到端延迟 |
-| `frontendEncodeMs` | `ref<number\|null>` | CanvasEncoder 回调传入 | 前端编码耗时 |
+| `frontendEncodeMs` | `ref<number\|null>` | CanvasEncoder 回调传入 | 前端编码耗时（useVideoStream.ts onEncode 回调） |
 | `frontendRenderMs` | `ref<number\|null>` | `performance.now() - resultNow` | 前端消息处理耗时 |
 | `pipelineExtraMs` | `computed<number\|null>` | `endToEndLatencyMs - backendProcessMs` | 链路额外开销 |
+
+> `fpsBackend`、`fpsInfer`、`fpsAlgo`、`fpsSend`、`fpsResult` 计算中，当分母为 0 或 null 时返回 null。
 
 ### 9.3 前端展示指标定义
 
@@ -432,9 +515,10 @@
 
 | 指标名称 | 来源 | 定位 | 建议处理 |
 |----------|------|------|----------|
-| **前端编码耗时** (`frontendEncodeMs`) | CanvasEncoder 回调 | 前端 canvas → base64 编码耗时 | 开发阶段保留，正式页面可折叠或隐藏 |
+| **前端编码耗时** (`frontendEncodeMs`) | useVideoStream onEncode 回调 | 前端 canvas → base64 JPEG 编码耗时 | 开发阶段保留，正式页面可折叠或隐藏 |
 | **前端消息处理** (`frontendRenderMs`) | `performance.now()` 差值 | 前端收到 ws 消息到写入 state 的耗时 | 开发阶段保留，正式页面可折叠或隐藏 |
 | **链路额外开销** (`pipelineExtraMs`) | `endToEndLatencyMs - backendProcessMs` | 端到端 - 后端耗时 | **严禁对外表述为"纯网络延迟"**。包含队列等待、网络传输、前端处理等 |
+| **Pending 诊断** | useVideoStream 内部状态 | pending / pendingFrameId / pendingAgeMs | 临时调试区展示，限 3 秒刷新 |
 
 ### 9.4 文案口径警告
 
@@ -448,3 +532,133 @@
 | `endToEndLatencyMs` = 取帧到渲染完成 | `endToEndLatencyMs = t(收到结果) - t(发送帧)`，不含前端渲染 |
 | `frontendRenderMs` = 浏览器真实渲染耗时 | 仅是 ws 消息到 state 写入的差值，不含 DOM 渲染 |
 | `pipelineExtraMs` = 纯网络延迟 | 包含队列等待 + 网络传输 + 前端处理，不能简化为"网络延迟" |
+
+---
+
+## 10) useWebSocket.ts 当前真实行为
+
+### 10.1 连接与重连
+
+- **connect()**：新建 WebSocket，若已有 OPEN 或 CONNECTING socket 则直接返回（防止重复连接）
+- **指数退避重连**：首次延迟 1000ms，之后每次翻倍，上限 30000ms（WS_MAX_RECONNECT_DELAY_MS）
+- **连接超时**：3 秒内 onopen 未触发，自动关闭并重连（单次，不走指数退避）
+- **manualDisconnect**（disconnect()）：设置 `manualDisconnect=true`，不再自动重连
+- **visibility 重连**：页面变为 visible 时，若 socket 不健康（断开或异常），立即强制重连（`isRecovering` 防止并发）
+
+### 10.2 心跳机制
+
+- 心跳间隔 15s（`HEARTBEAT_INTERVAL_MS`），每轮发送 `__heartbeat_ping__`
+- 发送后启动 20s 超时计时器（`HEARTBEAT_TIMEOUT_MS`），若超时未收到 pong 则关闭 socket
+- 收到 `__heartbeat_pong__` 或 `__heartbeat_ping__` 均刷新 `lastPongTime`
+
+### 10.3 waitForConnected()
+
+返回 Promise，若已连接则立即 resolve；若未连接则注册一次性的 `pendingConnectedResolve`，onopen 时调用 resolve。Detection.vue 的 visibility 恢复逻辑依赖此方法。
+
+### 10.4 sendFailCount
+
+send() 失败时（socket 未 OPEN）递增，供诊断使用。
+
+### 10.5 onUnmounted
+
+组件销毁时移除 visibilitychange 监听并调用 disconnect()。
+
+---
+
+## 11) useVideoStream.ts 当前真实行为
+
+### 11.1 背压机制（单帧 in-flight）
+
+- `pending`：当前是否有帧正在等待 inference_result（最多 1 帧）
+- `pendingFrameId`：正在等待的那帧 frame_id（用于 ACK 对齐，防止乱序释放）
+- 发送帧后立即置 `pending=true`，收到匹配的 inference_result 后 `ackFrame(frame_id)` 释放
+- **超时兜底**：1.8s 未收到 ACK，`onPendingTimeout()` 强制释放 pending（防止后端异常导致永久卡死）
+- **降级 ACK**：若 pending 已超时且收到 frame_id 更大的结果帧，强制清理 pending 一次，防止长视频跑久后因一帧之差永久卡死
+
+### 11.2 自适应 FPS 限流
+
+- `HIGH_LATENCY_THRESHOLD = 150ms`：端到端延迟超过此值进入节流模式
+- `LOW_LATENCY_RECOVERY = 100ms` + `RECOVERY_THRESHOLD = 3`：连续 3 帧低于此值，退出节流模式
+- 节流模式：发送频率从 `VIDEO_TARGET_FPS`（默认 20）降至 `VIDEO_THROTTLED_FPS`（默认 5）
+
+### 11.3 限频日志
+
+每 3 秒最多打印同类日志一次（`LOG_INTERVAL_MS = 3000`），防止刷屏。
+
+### 11.4 来源管理
+
+| 方法 | 行为 |
+|------|------|
+| `loadFile(file)` | 创建 Blob URL，video.loop=false（需要 ended 事件触发 finished），触发 hasVideo=true |
+| `selectWebcam()` | getUserMedia，await video.play()，立即 startPush()（无 ready 状态，直接 analyzing） |
+| `resetVideo()` | 停止推流、清理 pending、释放摄像头/Blob URL，重置 hasVideo=false |
+| `stopPush()` | 清理推流定时器，清除 pending，isPlaying=false |
+| `startPush()` | 重置连续高延迟计数，从 tick() 开始循环（tick 内调度自身） |
+
+### 11.5 诊断导出
+
+`pending`、`pendingFrameId`、`pendingAgeMs` 均以 `computed` ref 形式导出，供 Detection.vue 调试面板展示。
+
+---
+
+## 12) useCanvasRenderer.ts 当前真实行为
+
+### 12.1 三态渲染
+
+| hasVideo | isPlaying | 渲染内容 |
+|----------|-----------|----------|
+| false | — | Standby 屏幕（网格 + 扫描线动画 + 脉冲文字 + 角括号装饰） |
+| true | false | 视频当前帧（无 BBox，READY 或 FINISHED 状态） |
+| true | true | 视频当前帧 + BBox 叠加层 + 检测摘要浮层 + REC 指示灯 |
+
+### 12.2 BBox 绘制
+
+- 按 `class_name` 查 `CLASS_COLORS` 调色板，���匹配用 `DEFAULT_DETECTION_COLOR = #00ff88`
+- 半透明填充 + 边框（2px）+ 角 tick 线 + 标签 chip（深色背景，白色文字）
+- 标签 chip 自适应位置（bbox 顶部放不下则移到 bbox 内部下方）
+
+### 12.3 检测摘要浮层
+
+左下角半透明面板，显示 `CLASS: COUNT` 统计（BBox 绘制前触发）。
+
+---
+
+## 13) 当前 API 层
+
+### 13.1 api/history.ts
+
+| 方法 | 端点 | 说明 |
+|------|------|------|
+| `saveDetection(payload)` | POST `/api/history` | 保存检测记录 |
+| `listHistory({page, limit, status})` | GET `/api/history` | 分页查询历史记录 |
+| `getHistory(id)` | GET `/api/history/{id}` | 获取单条记录详情 |
+| `deleteHistory(id)` | DELETE `/api/history/{id}` | 删除记录 |
+| `getVideoUrl(id)` | GET `/api/history/{id}/video` | 获取视频下载 URL（`FileResponse`） |
+| `getDataUrl(id)` | GET `/api/history/{id}/data` | 获取 JSON 下载 URL（`StreamingResponse`） |
+
+### 13.2 types/skyline.ts
+
+关键类型：VideoFrame、InferenceResult（含完整 timing 字段 + model_id）、Detection、ErrorMessage、ModelStatusMessage、ServerMessage、ModelConfig、ModelCapabilities、HistoryRecord（与 api/history.ts 共用）。
+
+---
+
+## 14) 当前状态管理
+
+### 14.1 store/systemStatus.ts
+
+模块级 reactive refs（无需 Pinia/Vuex）：
+
+| 变量 | 类型 | 写入方 | 读取方 |
+|------|------|--------|--------|
+| `wsStatus` | `'connected' \| 'connecting' \| 'disconnected'` | useWebSocket | MainLayout 头部指示灯 |
+| `isGpuActive` | `boolean` | Detection.vue（`watch(isAnalyzing, v => isGpuActive.value = v)`） | MainLayout 头部指示灯 |
+
+### 14.2 Detection.vue 的 onMounted 健康检查
+
+页面加载时若 ws 未连接，调用 connect() 建立连接，确保 header 指示灯及时更新到 ONLINE。首次加载模型时提示"首次加载模型中…"（Phase 5+）。
+
+### 14.3 History.vue 与 HistoryDetail.vue 的数据口径
+
+- **"检测事件次数"**：逐帧检测框累计次数，不代表视频中出现的独立目标数量
+- **检测事件频率** = `total_detections / duration`
+- **类别覆盖** = 实际检测到类别数 / 配置类别数

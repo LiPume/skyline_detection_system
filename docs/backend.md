@@ -1,7 +1,7 @@
 # Skyline 后端架构文档
 
 > 本文档面向大型语言模型（LLM）和新开发者，完整描述 Skyline 后端的设计哲学、模块划分和交互流程。
-> 代码版本对应 2026-04-01，包含 ONNX CUDA 加速链路、LIFO 调度器、PT/ONNX 统一 timing 协议。
+> 代码版本对应 2026-04-09，包含 PT/ONNX 统一 timing 协议、LIFO 调度器、Phase 5 模型冷加载状态通知。
 
 ---
 
@@ -19,20 +19,22 @@
 
 ```
 backend/
-├── main.py                  # FastAPI 入口，注册路由，启动 lifespan
+├── main.py                  # FastAPI 入口，注册路由，启动 lifespan（asynccontextmanager）
 ├── core/
-│   ├── models.py            # Pydantic 数据模型（VideoFrame, InferenceResult, Detection）
-│   ├── inference.py         # LIFO 调度器 + _blocking_inference（统一推理入口）
-│   └── database.py          # SQLite 初始化（历史记录存储）
+│   ├── models.py            # Pydantic v2 数据模型（VideoFrame, InferenceResult, Detection, ErrorMessage, StatusMessage）
+│   ├── inference.py         # LIFO 调度器（InferenceScheduler）+ _blocking_inference（统一推理入口）
+│   └── database.py          # SQLAlchemy 2.0 async + aiosqlite（历史记录存储）
 ├── models/
 │   ├── registry.py          # 双注册表：MODEL_REGISTRY（前端用） + RUNTIME_CONFIG（执行层用）
 │   ├── model_manager.py     # ModelManager 工厂 + BaseDetector 抽象类 + PTDetector + ONNXDetector
-│   └── history.py           # 历史记录 CRUD
+│   └── history.py           # DetectionRecord SQLAlchemy 模型
 └── routers/
-    ├── video_stream.py      # WebSocket /api/ws/video_stream
-    ├── history.py           # REST /api/history/*
+    ├── video_stream.py      # WebSocket /api/ws/video_stream（含心跳 + 模型冷加载状态通知）
+    ├── history.py           # REST /api/history/*（分页列表/详情/删除/下载视频/下载 JSON）
     └── models.py            # REST /api/models/*（前端获取模型能力）
 ```
+
+> **注意**：代码中暂未实现 TensorRT（TRTDetector）运行时。`RUNTIME_CONFIG` 中 `runtime_type` 的枚举值 `trt` 和 `openvino` 仅作为预留接口存在。
 
 ---
 
@@ -59,20 +61,35 @@ VideoFrame
 InferenceResult
 ├── message_type: "inference_result"
 ├── frame_id: int
-├── timestamp: float
+├── timestamp: float          # 回传客户端发送时间戳，用于计算端到端延迟
 ├── inference_time_ms: float  # 后端单帧总处理耗时（_blocking_inference 整体）
-├── session_ms: float|null    # 纯模型 forward 耗时（ONNX: session.run / PT: Results.speed）
-├── preprocess_ms: float|null # 预处理耗时（ONNX: _preprocess / PT: Results.speed）
-├── postprocess_ms: float|null # 后处理耗时（ONNX: _postprocess / PT: Results.speed）
+├── session_ms: float|null     # 纯模型 forward 耗时（ONNX: session.run / PT: Results.speed["inference"]）
+├── preprocess_ms: float|null # 预处理耗时（ONNX: _preprocess / PT: Results.speed["preprocess"] + decode）
+├── postprocess_ms: float|null # 后处理耗时（ONNX: _postprocess / PT: Results.speed["postprocess"]）
+├── model_id: str             # 本次推理使用的模型 ID（Phase 5+ 冷加载状态通知用）
 └── detections: list[Detection]
 
 Detection
 ├── class_name: str
 ├── confidence: float
-└── bbox: (x, y, w, h)         # 原始图像坐标系
+└── bbox: (x, y, w, h)         # 原始图像坐标系，左上角 + 宽高
 ```
 
-> **注意**：`inference_time_ms` 与 `session_ms` 是不同概念。前者是后端总耗时，后者是纯推理耗时。
+### 3.3 服务端状态通知（下行）
+
+```
+StatusMessage  ← Phase 5+ 模型冷加载生命周期通知
+├── message_type: "status"
+├── phase: "model_loading"     # 模型首次冷加载开始
+└── phase: "model_ready"      # 模型冷加载完成
+
+ErrorMessage
+├── message_type: "error"
+├── error_code: int
+└── detail: str
+```
+
+> **`inference_time_ms` vs `session_ms`**：前者是后端总耗时（含 detector 获取、base64 解码、全流程），后者是纯模型 forward。两者口径不同，不可混淆。
 
 ---
 
@@ -160,12 +177,18 @@ Detection
     │     │
     │ elapsed_ms = (perf_counter() - t0) * 1000
     │
-    │ return InferenceResult(frame_id, timestamp, elapsed_ms, detections)
+    │ return InferenceResult(frame_id, timestamp, elapsed_ms, detections,
+    │                        session_ms, preprocess_ms, postprocess_ms, model_id)
     ▼
-[video_stream.py — callback]
+[video_stream.py — _send_result 回调]
+    │ # Phase 5+: 若本帧为某模型的首次冷加载帧，先发送 model_ready 状态通知
+    │ if model_id not in _cold_loaded_models:
+    │     _cold_loaded_models.add(model_id)
+    │     await websocket.send_text(StatusMessage(phase="model_ready", model_id=model_id))
+    │
     │ await websocket.send_text(result.model_dump_json())
     ▼
-[Frontend] 渲染检测结果
+[Frontend] 渲染检测结果 + 显示模型就绪提示
 ```
 
 ---
@@ -182,49 +205,94 @@ Pydantic v2 数据模型。用 `model_validate` 做 WebSocket 消息校验，格
 
 ### 5.3 `core/inference.py`
 
-**`_blocking_inference(frame)`**：运行在线程池（`run_in_threadpool`），完全不知道 runtime 类型，只负责：模型 ID 解析、区分 open_vocab/closed_set、调用 `detector.infer()`、异常捕获、返回 `InferenceResult`。
+**`_blocking_inference(frame)`**：运行在线程池（`run_in_threadpool`），完全不知道 runtime 类型，只负责：模型 ID 解析（+ 降级到 default）、验证模型存在、区分 open_vocab/closed_set、调用 `detector.infer()`、异常捕获（ValueError/RuntimeError/Exception）、返回 `InferenceResult`（含 session_ms / preprocess_ms / postprocess_ms / model_id）。
 
 **`InferenceScheduler`**：LIFO 单帧缓冲调度器。
-- 新帧到来时若 AI 线程忙，新帧直接覆盖 `_latest_frame`，丢弃旧帧
+- 新帧到来时若 AI 线程忙，新帧直接覆盖 `_latest_frame`，丢弃旧帧（记录 `_dropped_frames` 计数）
 - 仪表盘永远显示当前时刻，不会积压延迟
 - `asyncio.Lock` 保证 `_latest_frame` 写操作线程安全
+- `asyncio.Event`（`_has_frame`）用于协调 pop 线程与 push 线程的等待/唤醒
+- `stop()` 方法通过 `_running=False` + `_has_frame.set()` 安全退出循环
 
 ### 5.4 `models/registry.py` — 双注册表
 
-**`MODEL_REGISTRY[model_id] → ModelCapabilities`**（前端用）：display_name、model_type、supported_classes、description。前端 `GET /api/models` 返回这个。
+**`MODEL_REGISTRY[model_id] → ModelCapabilities`**（前端用）：display_name、model_type、supported_classes、class_filter_enabled、description。前端 `GET /api/models` 返回这个。
 
-**`RUNTIME_CONFIG[model_id] → ModelConfig`**（执行层用）：runtime_type、weight_path、confidence_threshold、device。`ModelManager` 查这个决定实例化哪个 detector。
+**`RUNTIME_CONFIG[model_id] → ModelConfig`**（执行层用）：runtime_type、weight_path、confidence_threshold、warmup_enabled、device。`ModelManager` 查这个决定实例化哪个 detector。
 
 两表分离保证：运行时后端切换不影响前端 API 响应。
+
+当前注册模型：
+
+| model_id | runtime_type | model_type | 说明 |
+|----------|-------------|------------|------|
+| `YOLO-World-V2` | pt | open_vocab | ultralytics YOLOWorld，开放词汇 |
+| `YOLOv8-Base` | pt | closed_set | ultralytics YOLOv8n，COCO 80 类 |
+| `YOLOv8-Car` | onnx | closed_set | yolov8_car.onnx，自定义车辆 5 类 |
+| `YOLOv8-VisDrone` | onnx | closed_set | yolov8x_visdrone_best.onnx，VisDrone 10 类 |
+
+> TensorRT（trt）和 OpenVINO（openvino）的 `runtime_type` 值在 `ModelConfig` 中已预留，但代码中尚未实现对应的 detector 类。
 
 ### 5.5 `models/model_manager.py`
 
 #### BaseDetector 抽象类
 
 所有 detector 共享 `infer()`（base64 解码 + prompt 清洗 + 后置类别过滤），子类只需实现：
-- `load()`：懒加载模型
-- `_do_infer(img, clean_prompt_classes)`：推理逻辑
+- `load()`：懒加载模型（双检查锁，线程安全）
+- `_do_infer(img, clean_prompt_classes)`：推理逻辑，返回 `(detections, preprocess_ms, session_ms, postprocess_ms)`
+
+共享工具方法：
+- `_clean_prompt_classes()`：扁平化逗号分隔字符串并小写化
+- `_parse_boxes()`：ultralytics Boxes → list[Detection]，用于 PTDetector
+
+回调机制：
+- `set_on_loaded_callback(cb)`：设置冷加载完成后回调，仅触发一次
 
 #### PTDetector
 
-内部区分 open_vocab（YOLOWorld）和 closed_set（YOLOv8）。`set_classes()` + `predict()` 序列化为 `self._infer_lock`。有 GPU 预热。
+内部区分 open_vocab（YOLOWorld）和 closed_set（YOLOv8）：
+- `open_vocab`：`model.set_classes(prompts)` + `model.predict()`，每次推理前重新设定类别
+- `closed_set`：`model.predict()`，直接全量输出
+
+关键机制：
+- `_infer_lock`（threading.Lock）：保证 `set_classes()` + `predict()` 在共享 GPU 上序列化
+- 冷加载完成后触发模块级 `_cold_load_callback(model_id)`
+
+PTDetector 子类（每个模型一个，不重复逻辑）：
+- `_YOLOWorldV2`：权重 `yolov8s-worldv2.pt`，conf=0.25，有 GPU 预热
+- `_YOLOv8Base`：权重 `yolov8n.pt`（ultralytics 自动下载），conf=0.25，无预热
+- `_YOLOv8Car`：权重 `.pt`（PT 路径但已标记为备用），conf=0.5，无预热
 
 #### ONNXDetector
 
 见第六节专题。
 
+#### ModelManager 工厂
+
+- `get_detector(model_id)`：懒加载 + 缓存（双检查锁）
+- `_create_detector()`：读取 `RUNTIME_CONFIG` → 查 `_RUNTIME_FACTORIES` 注册表 → 调用对应 factory
+- 相对路径权重自动解析到 `skyline/weights/` 目录
+- ONNX 路径额外注入 `class_names`（从 `MODEL_REGISTRY` 取）
+
 ### 5.6 `models/history.py`
 
-SQLite 存储历史检测记录。
+SQLAlchemy 2.0 `DetectionRecord` 模型：
+- 字段：id、created_at、duration、video_name、video_path、model_name、class_counts（JSON）、total_detections、status、thumbnail_path、extra_data（JSON）
+- `to_dict()` 方法将 `extra_data.model_config` 展开为 `detection_model` 字段（兼容旧格式）
 
 ### 5.7 `routers/`
 
 | 端点 | 类型 | 作用 |
 |------|------|------|
-| `/api/ws/video_stream` | WebSocket | 双向视频流推理 |
-| `/api/models` | GET | 列表所有模型能力 |
-| `/api/models/{model_id}/capabilities` | GET | 单模型详细信息 |
-| `/api/history` | GET/POST | 查询/保存历史记录 |
+| `/api/ws/video_stream` | WebSocket | 双向视频流推理（含心跳 ping/pong + 模型冷加载状态通知） |
+| `/api/models` | GET | 列表所有模型能力（model_id、display_name、model_type、description） |
+| `/api/models/{model_id}/capabilities` | GET | 单模型详细信息（含 supported_classes） |
+| `/api/history` | POST | 保存检测记录 |
+| `/api/history` | GET | 分页查询历史记录（page、limit、status 过滤） |
+| `/api/history/{id}` | GET | 获取单条记录详情 |
+| `/api/history/{id}` | DELETE | 删除记录 |
+| `/api/history/{id}/video` | GET | 下载原始视频文件 |
+| `/api/history/{id}/data` | GET | 导出检测数据 JSON |
 
 ---
 
@@ -286,6 +354,21 @@ self._session = ort.InferenceSession(path, sess_opts, providers=[...])
 |-----------|------|------|
 | `4 + 1 + len(class_names)` | 5-class YOLOv8-Org | 4 bbox + 1 objectness + N class scores |
 | `4 + len(class_names)` | COCO 80-class | 4 bbox + 80 class scores |
+
+### 6.6 NMS 后处理
+
+ONNXDetector 内置了逐类 NMS（非极大值抑制）：
+- `self._nms()`：按类分组，对每类独立执行 NMS（IoU threshold=0.45）
+- `self._compute_iou()`：xyxy 格式 IoU 计算
+- NMS 在置信度过滤之后、坐标还原之前执行
+- 适用于 5-class 和 80-class 两种输出格式
+
+### 6.7 Letterbox 坐标还原流程
+
+1. 计算 scale = min(640/iw, 640/ih)
+2. 将检测框从模型空间（640×640 canvas）还原到原始图像坐标
+3. 使用浮点精度避免截断误差
+4. Clip 到图像边界（防止越界）
 
 ---
 
@@ -363,7 +446,7 @@ self._session = ort.InferenceSession(path, sess_opts, providers=[...])
 | 阶段 | ONNX 实现 | PT 实现 |
 |------|-----------|---------|
 | 计时方式 | wall-clock `time.perf_counter()` | Ultralytics `Results.speed` |
-| `preprocess_ms` | `_preprocess()` 计时 | `Results.speed["preprocess"]` |
+| `preprocess_ms` | `_preprocess()` 计时（+ decode） | `Results.speed["preprocess"]`（+ decode） |
 | `session_ms` | `session.run()` 计时 | `Results.speed["inference"]` |
 | `postprocess_ms` | `_postprocess()` 计时 | `Results.speed["postprocess"]` |
 
@@ -376,10 +459,18 @@ self._session = ort.InferenceSession(path, sess_opts, providers=[...])
 
 二者不一定严格相等，因为 `inference_time_ms` 还可能额外包含：
 - detector 获取开销（已缓存时极小）
-- schema / `DetectorResult` / `InferenceResult` 对象构造
+- `DetectorResult` / `InferenceResult` 对象构造
 - Python 函数调用栈开销
 
-### 7.5 哪些后端字段必须长期保留
+### 7.5 Phase 5+ 新增字段：model_id
+
+`model_id` 字段用于前端判断"某模型的首次冷加载帧已推理完成"，触发模型就绪提示：
+
+- 首次冷加载时，后端先通过 `_cold_load_callback` 发送 `StatusMessage(phase="model_loading")`
+- 冷加载完成后，在 `_send_result` 回调中发送 `StatusMessage(phase="model_ready")`
+- 前端收到 `model_ready` 后，将状态从 `loading_model` 切换为 `analyzing`
+
+### 7.6 哪些后端字段必须长期保留
 
 以下字段属于前后端统一协议核心字段，**后续不能随意删除**：
 
@@ -389,6 +480,7 @@ self._session = ort.InferenceSession(path, sess_opts, providers=[...])
 | `session_ms` | 支撑"纯推理耗时 / FPS"（比赛硬指标） |
 | `preprocess_ms` | 支撑"算法全流程耗时"计算 |
 | `postprocess_ms` | 支撑"算法全流程耗时"计算 |
+| `model_id` | 支撑 Phase 5+ 模型冷加载状态通知 |
 
 ---
 
@@ -439,25 +531,37 @@ self._session = ort.InferenceSession(path, sess_opts, providers=[...])
 
 ## 9. 扩展指南
 
-### 新增 PT 模型
+### 9.1 新增 PT 模型
 
 1. `registry.py` → `MODEL_REGISTRY` 加 `ModelCapabilities`
 2. `registry.py` → `RUNTIME_CONFIG` 加 `ModelConfig`（runtime_type="pt"）
 3. `model_manager.py` → `_build_pt_detector()` 加 if 分支
 4. inference.py 零改动
 
-### 新增 ONNX 模型
+### 9.2 新增 ONNX 模型
 
-1. `registry.py` 两个注册表各加一条
+1. `registry.py` 两个注册表各加一条（model_id、display_name、supported_classes → MODEL_REGISTRY；runtime_type="onnx"、weight_path、class_names → RUNTIME_CONFIG）
 2. 如输出格式非标准，在 `ONNXDetector._postprocess()` 加识别分支
 3. inference.py 零改动
 
-### 新增 TensorRT runtime
+### 9.3 新增 TensorRT runtime（预留，尚未实现）
 
 1. 实现 `TRTDetector(BaseDetector)`
 2. `model_manager.py` 注册：`@_register_runtime("trt")`
 3. `registry.py` 改 `runtime_type="trt"`
 4. inference.py 零改动
+
+> **当前状态**：代码中 `TRTDetector` 类尚未实现，`ModelConfig` 的 `runtime_type` 枚举中有 `"trt"` 和 `"openvino"` 作为预留值，但对应 factory 尚未注册。
+
+### 9.4 当前 WebSocket 心跳机制（Phase 5+）
+
+后端 WebSocket 端点内置心跳 ping/pong 机制：
+
+- **服务端 → 客户端**：每 15 秒发送 `__heartbeat_ping__`
+- **客户端 → 服务端**：收到后回复 `__heartbeat_pong__`
+- **超时检测**：若 20 秒内未收到 pong，认定连接已死亡，退出消息循环
+
+前端 `useWebSocket.ts` 同步实现了相同的心跳逻辑（对应 15s/20s 配置），双方互相探测死连接。
 
 ---
 
@@ -465,9 +569,23 @@ self._session = ort.InferenceSession(path, sess_opts, providers=[...])
 
 | 配置项 | 位置 |
 |--------|------|
-| ONNX 模型权重路径 | `registry.py` → `RUNTIME_CONFIG["YOLOv8-Car"].weight_path` |
-| CUDA device ID | `registry.py` → `RUNTIME_CONFIG["YOLOv8-Car"].device` |
-| 置信度阈值 | `registry.py` → `RUNTIME_CONFIG["YOLOv8-Car"].confidence_threshold` |
+| ONNX 模型权重路径 | `registry.py` → `RUNTIME_CONFIG["YOLOv8-Car"].weight_path`（相对于 `skyline/weights/`） |
+| CUDA device ID | `registry.py` → `RUNTIME_CONFIG[model_id].device`（默认值 `cuda:0`） |
+| 置信度阈值 | `registry.py` → `RUNTIME_CONFIG[model_id].confidence_threshold`（默认 0.25） |
+| ONNX EP 配置 | `model_manager.py` → `ONNXDetector.load()`（providers 列表） |
 | 前端 API 模型列表 | `registry.py` → `MODEL_REGISTRY` |
-| 日志格式 | `main.py` → `logging.basicConfig` |
-| 历史记录 DB | `core/database.py` |
+| 日志格式 | `main.py` → `logging.basicConfig(level=INFO)` |
+| 历史记录 DB | `core/database.py` → `DB_PATH = skyline/data/skyline.db` |
+| WebSocket 端点 | `routers/video_stream.py` �� `/api/ws/video_stream` |
+| 心跳间隔 | `routers/video_stream.py` → `HEARTBEAT_INTERVAL_MS=15_000` / `HEARTBEAT_TIMEOUT_MS=20_000` |
+
+---
+
+## 11. 已知限制与未实现功能
+
+- **TensorRT 尚未实现**：`TRTDetector` 类预留但不存在，`runtime_type="trt"` 仅作占位。
+- **OpenVINO 尚未实现**：`runtime_type="openvino"` 仅作占位。
+- **PT 路径 timing 不完整**：PT 模型（YOLO-World-V2、YOLOv8-Base）使用 ultralytics 原生 `Results.speed`，完整暴露 `session_ms` / `preprocess_ms` / `postprocess_ms`，口径与 ONNX 一致。
+- **视频保存**：历史记录中 `video_path` 字段目前由前端写入，后端本身不处理视频文件上传。
+- **ONNX warmup**：ONNXDetector 加载时无 warmup 推理（仅打印 EP 信息），GPU 预热由首次实际推理完成。
+- **YOLOv8-Car PT 路径**：registry 中 `YOLOv8-Car` 已标注为 `runtime_type="onnx"`，不存在 PT 版本。

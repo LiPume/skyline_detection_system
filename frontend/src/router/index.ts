@@ -8,7 +8,7 @@ import Dashboard     from '@/views/Dashboard.vue'
 const routes = [
   { path: '/',             component: Dashboard,   meta: { title: '系统总览' } },
   { path: '/detection',    component: Detection,     meta: { title: '智能检测舱' } },
-  { path: '/history',      component: History,       meta: { title: '历史记录库' } },
+  { path: '/history',      component: History, name: 'history',      meta: { title: '历史记录库' } },
   { path: '/history/:id',  component: HistoryDetail, name: 'history-detail', meta: { title: '数据详情' } },
   { path: '/performance',  component: Performance,    meta: { title: '性能分析' } },
 ]

@@ -32,7 +32,7 @@ frontend/.env.local
 *.pth
 *.ckpt
 *.onnx
-
+*.engine
 # Dataset / media (large binary files)
 *.mp4
 *.avi
