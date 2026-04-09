@@ -4,16 +4,46 @@
  * 轻量级自然语言任务解析建议面板。
  * 只展示推荐结果，不修改现有 Detection 表单状态。
  */
-import { ref } from 'vue'
+import { ref, onUnmounted } from 'vue'
 import { parseTask } from '@/api/agent'
 import type { AgentRecommendation } from '@/types/skyline'
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
-const userInput   = ref('')
-const isLoading  = ref(false)
-const result     = ref<AgentRecommendation | null>(null)
-const errorMsg   = ref<string | null>(null)
+const userInput       = ref('')
+const isLoading       = ref(false)
+const result          = ref<AgentRecommendation | null>(null)
+const errorMsg        = ref<string | null>(null)
+
+// 阶段提示
+const stageIndex      = ref(0)
+const LONG_WAIT_MS    = 8000
+const stages           = ['正在理解你的任务', '正在匹配可用模型与类别', '正在生成推荐方案']
+
+let stageTimer: ReturnType<typeof setInterval> | null = null
+let longWaitTimer: ReturnType<typeof setTimeout> | null = null
+let longWaitShown = ref(false)
+
+function startTimers() {
+  stopTimers()
+  stageIndex.value = 0
+  longWaitShown.value = false
+  stageTimer = setInterval(() => {
+    if (stageIndex.value < stages.length - 1) stageIndex.value++
+  }, 1200)
+  longWaitTimer = setTimeout(() => {
+    longWaitShown.value = true
+  }, LONG_WAIT_MS)
+}
+
+function stopTimers() {
+  if (stageTimer !== null) { clearInterval(stageTimer); stageTimer = null }
+  if (longWaitTimer !== null) { clearTimeout(longWaitTimer); longWaitTimer = null }
+  stageIndex.value = 0
+  longWaitShown.value = false
+}
+
+onUnmounted(stopTimers)
 
 // ── Actions ───────────────────────────────────────────────────────────────────
 
@@ -22,15 +52,17 @@ async function handleParse() {
   if (!text) return
 
   isLoading.value = true
-  errorMsg.value = null
-  result.value   = null
+  errorMsg.value  = null
+  result.value    = null
+  startTimers()
 
   try {
     result.value = await parseTask(text)
   } catch (err: unknown) {
-    errorMsg.value = err instanceof Error ? err.message : '解析失败，请稍后重试'
+    errorMsg.value = '任务理解失败，请稍后重试。你也可以直接手动配置模型和类别。'
   } finally {
     isLoading.value = false
+    stopTimers()
   }
 }
 
@@ -96,8 +128,16 @@ function confidenceBg(c: string): string {
           <path d="M12 2a10 10 0 1 0 10 10"/>
           <polyline points="12,6 12,12 16,14"/>
         </svg>
-        {{ isLoading ? '解析中…' : '理解任务' }}
+        {{ isLoading ? stages[stageIndex] : '理解任务' }}
       </button>
+
+      <!-- Stage hint & long-wait hint -->
+      <div v-if="isLoading" class="flex items-center gap-2">
+        <span class="text-[10px] text-slate-500 leading-relaxed">{{ stages[stageIndex] }}…</span>
+      </div>
+      <div v-if="isLoading && longWaitShown" class="text-[10px] text-slate-600 leading-relaxed">
+        智能解析较慢，你也可以稍后直接手动配置
+      </div>
     </div>
 
     <!-- Error -->
