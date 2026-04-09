@@ -6,7 +6,7 @@ Only handles "task understanding / plan recommendation" — never triggers real 
 import json
 import logging
 import os
-from typing import Literal
+from typing import Optional
 
 import httpx
 
@@ -24,6 +24,33 @@ _AGENT_API_KEY: str | None = None
 _AGENT_BASE_URL: str = "https://api.siliconflow.cn/v1"
 _AGENT_MODEL: str = "deepseek-ai/DeepSeek-V3.2"
 
+# ── Closed-set priority: model_id → list of class-name sets it fully covers ──
+# Maps each closed-set model to a list of frozensets representing equivalent class groups.
+# A target class that appears in one of these sets is considered "covered" by this model.
+_CLOSED_SET_COVERAGE_GROUPS: dict[str, list[frozenset]] = {
+    "YOLOv8-Base": [
+        frozenset({"person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck",
+                    "boat", "traffic light", "fire hydrant", "stop sign", "parking meter", "bench",
+                    "bird", "cat", "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra",
+                    "giraffe", "backpack", "umbrella", "handbag", "tie", "suitcase", "frisbee",
+                    "skis", "snowboard", "sports ball", "kite", "baseball bat", "baseball glove",
+                    "skateboard", "surfboard", "tennis racket", "bottle", "wine glass", "cup",
+                    "fork", "knife", "spoon", "bowl", "banana", "apple", "sandwich", "orange",
+                    "broccoli", "carrot", "hot dog", "pizza", "donut", "cake", "chair", "couch",
+                    "potted plant", "bed", "dining table", "toilet", "tv", "laptop", "mouse",
+                    "remote", "keyboard", "cell phone", "microwave", "oven", "toaster", "sink",
+                    "refrigerator", "book", "clock", "vase", "scissors", "teddy bear", "hair drier",
+                    "toothbrush"}),
+    ],
+    "YOLOv8-Car": [
+        frozenset({"car", "truck", "bus", "van", "freight_car"}),
+    ],
+    "YOLOv8-VisDrone": [
+        frozenset({"pedestrian", "people", "bicycle", "car", "van", "truck",
+                    "tricycle", "awning-tricycle", "bus", "motor"}),
+    ],
+}
+
 
 def _load_config() -> None:
     """Read environment variables lazily (call once at first use)."""
@@ -32,6 +59,79 @@ def _load_config() -> None:
         _AGENT_API_KEY = os.environ.get("AGENT_API_KEY", "").strip()
         _AGENT_BASE_URL = os.environ.get("AGENT_BASE_URL", "").strip() or "https://api.siliconflow.cn/v1"
         _AGENT_MODEL = os.environ.get("AGENT_MODEL", "").strip() or "deepseek-ai/DeepSeek-V3.2"
+
+
+def _normalize_model_id(raw: str) -> str:
+    """Strip whitespace and return a cleaned model identifier."""
+    return raw.strip()
+
+
+def _find_best_closed_set_model(target_classes: list[str]) -> str | None:
+    """
+    Find the closed-set model that best covers the target classes.
+
+    Returns the model_id of the most appropriate closed-set model if ALL target
+    classes are covered by it, otherwise None (indicating no closed-set model
+    is suitable and open_vocab should be used).
+    """
+    if not target_classes:
+        return None
+    target_set = {c.lower().strip() for c in target_classes}
+
+    best_model: str | None = None
+
+    for model_id, coverage_groups in _CLOSED_SET_COVERAGE_GROUPS.items():
+        caps = MODEL_REGISTRY.get(model_id)
+        if not caps or caps.model_type != "closed_set":
+            continue
+        for group in coverage_groups:
+            group_covered = target_set & group
+            if not group_covered:          # no overlap with this group
+                continue
+            # Does this group fully cover every target class?
+            if group_covered == target_set:
+                # Perfect cover — use the smallest group to prefer more specific models
+                if best_model is None or len(group) < len(coverage_groups[0] if not best_model else _CLOSED_SET_COVERAGE_GROUPS.get(best_model, [frozenset()])[0]):
+                    best_model = model_id
+                break
+
+    return best_model
+
+
+def _apply_closed_set_priority(
+    model_id: str,
+    target_classes: list[str],
+    raw_reason: str,
+) -> tuple[str, list[str], str]:
+    """
+    Apply closed-set priority: if all target classes are covered by a closed-set
+    model, switch to that model and update the reason accordingly.
+
+    Returns (final_model_id, final_target_classes, final_reason).
+    """
+    closed_caps = _find_best_closed_set_model(target_classes)
+
+    if closed_caps is None:
+        # No closed-set model can cover all targets; keep whatever LLM returned
+        return model_id, target_classes, raw_reason
+
+    if model_id == closed_caps:
+        # LLM already picked the right closed-set model
+        return model_id, target_classes, raw_reason
+
+    # Switch: open_vocab was recommended but a closed-set model covers all targets
+    final_model_id = closed_caps
+    final_target_classes = [c for c in target_classes if c.strip()]
+
+    caps = MODEL_REGISTRY.get(final_model_id)
+    display = caps.display_name if caps else final_model_id
+
+    final_reason = (
+        f"目标类别（{', '.join(final_target_classes)}）均属于 {display} 的固定类别，"
+        f"优先使用专用模型以获得更精确的检测效果。"
+    )
+
+    return final_model_id, final_target_classes, final_reason
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
@@ -150,11 +250,14 @@ def parse_detection_task(user_text: str) -> dict:
         raise RuntimeError(f"Agent 返回格式异常，无法解析：{exc}") from exc
 
     # ── Validate & sanitize ────────────────────────────────────────────────────
-    recommended_model_id = result.get("recommended_model_id", "")
-    if recommended_model_id not in MODEL_REGISTRY:
+    # Step 1: Normalize the model id and validate against registry
+    raw_model_id = _normalize_model_id(result.get("recommended_model_id", ""))
+    if raw_model_id and raw_model_id in MODEL_REGISTRY:
+        recommended_model_id = raw_model_id
+    else:
         logger.warning(
             "[agent_service] LLM returned unknown model '%s', falling back to YOLO-World-V2",
-            recommended_model_id,
+            raw_model_id,
         )
         recommended_model_id = "YOLO-World-V2"
 
@@ -178,11 +281,19 @@ def parse_detection_task(user_text: str) -> dict:
     if confidence not in ("high", "medium", "low"):
         confidence = "medium"
 
+    # Step 2: Capture the raw reason BEFORE any model/priority changes
+    raw_reason: str = str(result.get("reason", ""))[:200]
+
+    # Step 3: Apply closed-set priority — may override recommended_model_id
+    final_model_id, final_classes, final_reason = _apply_closed_set_priority(
+        recommended_model_id, target_classes, raw_reason
+    )
+
     return {
         "intent": intent,
-        "recommended_model_id": recommended_model_id,
-        "target_classes": target_classes,
+        "recommended_model_id": final_model_id,
+        "target_classes": final_classes,
         "report_required": bool(result.get("report_required", False)),
-        "reason": str(result.get("reason", ""))[:100],
+        "reason": final_reason,
         "confidence": confidence,
     }
