@@ -36,3 +36,32 @@ async function request<T>(path: string, body: object): Promise<T> {
 export function parseTask(userText: string): Promise<ParseTaskResponse> {
   return request<ParseTaskResponse>('/api/agent/parse-task', { user_text: userText })
 }
+
+// ── Short Report ─────────────────────────────────────────────────────────────────
+
+export interface ClassCountItem {
+  className: string
+  count: number
+}
+
+export interface GenerateReportRequest {
+  modelId: string
+  modelLabel: string
+  targetClasses: string[]
+  totalDetectionEvents: number
+  detectedClassCount: number
+  classCounts: ClassCountItem[]
+  maxFrameDetections: number
+  durationSec: number | null
+  summaryText: string
+  taskPrompt?: string | null
+}
+
+export interface GenerateReportResponse {
+  reportText: string
+}
+
+/** POST /api/agent/generate-report — generate short AI report from detection summary */
+export function generateReport(payload: GenerateReportRequest): Promise<GenerateReportResponse> {
+  return request<GenerateReportResponse>('/api/agent/generate-report', payload)
+}

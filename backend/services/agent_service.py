@@ -297,3 +297,117 @@ def parse_detection_task(user_text: str) -> dict:
         "reason": final_reason,
         "confidence": confidence,
     }
+
+
+# ── Short Report Generation ──────────────────────────────────────────────────────
+
+def generate_short_report(
+    model_id: str,
+    model_label: str,
+    target_classes: list[str],
+    total_detection_events: int,
+    detected_class_count: int,
+    class_counts: list[dict],
+    max_frame_detections: int,
+    duration_sec: float | None,
+    summary_text: str,
+    task_prompt: str | None = None,
+) -> str:
+    """
+    Generate a short AI report based on structured detection summary data.
+
+    Args:
+        model_id: Model identifier used for detection.
+        model_label: Human-readable model name.
+        target_classes: Target classes that were detected.
+        total_detection_events: Total number of detection events recorded.
+        detected_class_count: Number of distinct classes detected.
+        class_counts: List of {className, count} sorted by frequency.
+        max_frame_detections: Maximum detections in a single frame.
+        duration_sec: Total analysis duration in seconds.
+        summary_text: Local summary text already computed.
+        task_prompt: Optional original task prompt (not required).
+
+    Returns:
+        A short Chinese-language report as a plain string.
+
+    Raises:
+        ValueError: If API key is missing.
+        RuntimeError: If the LLM call fails.
+    """
+    _load_config()
+
+    if not _AGENT_API_KEY:
+        raise ValueError("Agent API key 未配置（AGENT_API_KEY 环境变量）")
+
+    # Build class counts string for the prompt
+    class_str = ", ".join(
+        f"{item['className']}（{item['count']}次）" for item in class_counts
+    ) if class_counts else "无"
+
+    duration_str = f"{duration_sec:.1f}秒" if duration_sec else "未知"
+
+    prompt_parts = [
+        f"检测任务使用 {model_label}（{model_id}）模型，",
+        f"目标类别：{', '.join(target_classes) if target_classes else '未指定'}。",
+        f"检测时长 {duration_str}，",
+        f"系统共记录 {total_detection_events} 次目标事件，",
+        f"共检测到 {detected_class_count} 个不同类别，",
+        f"单帧最大检测数 {max_frame_detections}，",
+        f"各类别分布：{class_str}。",
+    ]
+    if task_prompt:
+        prompt_parts.append(f"原始任务描述：{task_prompt}。")
+
+    detection_context = "\n".join(prompt_parts)
+
+    system_prompt = """你是一个专业的目标检测结果分析助手。
+
+## 你的职责
+根据提供的结构化检测摘要数据，生成一段简洁的中文短报告（100-200字），帮助用户快速理解检测结果。
+
+## 报告要求
+- 必须使用中文输出
+- 长度控制在 100-200 字之间
+- 内容包括：使用的模型、主要检测结果、类别分布特征、整体评价
+- 语言简洁专业，不要啰嗦
+- 只需要输出一段文字，不要使用 JSON 或其他格式
+- 不要编造数据，所有数据必须来自用户提供的摘要信息
+- 不要提及"根据您提供的信息"等套话，直接开始描述结果"""
+
+    user_prompt = f"请根据以下检测摘要生成短报告：\n\n{detection_context}"
+
+    try:
+        with httpx.Client(timeout=httpx.Timeout(30.0, connect=10.0)) as client:
+            response = client.post(
+                f"{_AGENT_BASE_URL}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {_AGENT_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": _AGENT_MODEL,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    "temperature": 0.3,
+                    "max_tokens": 512,
+                },
+            )
+            response.raise_for_status()
+            data = response.json()
+    except httpx.TimeoutException as exc:
+        raise RuntimeError(f"Agent 请求超时：{exc}") from exc
+    except httpx.HTTPStatusError as exc:
+        raise RuntimeError(f"Agent API 错误（{exc.response.status_code}）：{exc.response.text[:200]}") from exc
+    except Exception as exc:
+        raise RuntimeError(f"Agent 请求失败：{exc}") from exc
+
+    try:
+        raw = data["choices"][0]["message"]["content"].strip()
+    except (KeyError, IndexError) as exc:
+        logger.warning("[agent_service] Failed to extract report text: %s", exc)
+        raise RuntimeError("Agent 返回格式异常") from exc
+
+    return raw

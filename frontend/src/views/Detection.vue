@@ -8,6 +8,7 @@ import { useModelConfig } from '@/composables/useModelConfig'
 import { wsStatus as globalWsStatus, isGpuActive } from '@/store/systemStatus'
 import { LATENCY_THROTTLE_THRESHOLD_MS, LATENCY_BAR_MAX_MS } from '@/config'
 import { saveDetection }     from '@/api/history'
+import { generateReport }     from '@/api/agent'
 import TaskAssistantPanel from '@/components/detection/TaskAssistantPanel.vue'
 
 // ── DOM refs ───────────────────────────────────────────────────────────────────
@@ -50,6 +51,39 @@ function showToast(text: string, type: Toast['type'] = 'error', ms = 4000) {
   const id = toastSeq++
   toasts.value.push({ id, type, text })
   setTimeout(() => { toasts.value = toasts.value.filter(t => t.id !== id) }, ms)
+}
+
+// ── Short Report State (AI Report) ────────────────────────────────────────────
+type ReportState = 'idle' | 'generating' | 'done' | 'error'
+const reportState   = ref<ReportState>('idle')
+const reportText    = ref<string | null>(null)
+const reportLoading = computed(() => reportState.value === 'generating')
+
+async function triggerGenerateReport() {
+  if (!detectionSummary.value) return
+  if (reportState.value === 'generating') return
+
+  reportState.value = 'generating'
+  reportText.value  = null
+
+  try {
+    const resp = await generateReport({
+      modelId:              detectionSummary.value.modelId,
+      modelLabel:           detectionSummary.value.modelLabel,
+      targetClasses:        detectionSummary.value.targetClasses,
+      totalDetectionEvents: detectionSummary.value.totalDetectionEvents,
+      detectedClassCount:   detectionSummary.value.detectedClassCount,
+      classCounts:          detectionSummary.value.classCounts,
+      maxFrameDetections:   detectionSummary.value.maxFrameDetections,
+      durationSec:          detectionSummary.value.durationSec,
+      summaryText:          detectionSummary.value.summaryText,
+    })
+    reportText.value  = resp.reportText
+    reportState.value = 'done'
+  } catch (e: unknown) {
+    reportState.value = 'error'
+    showToast('AI 报告生成失败：' + (e instanceof Error ? e.message : '未知错误'), 'error', 5000)
+  }
 }
 
 // ── Model loading HUD (Phase 5+) ─────────────────────────────────────────────────
@@ -163,6 +197,9 @@ function resetStats() {
   maxFrameDetections.value = 0
   analysisDuration.value = 0
   saveState.value = 'idle'
+  // Reset AI report state as well
+  reportState.value = 'idle'
+  reportText.value  = null
 }
 
 // ── Analysis duration ───────────────────────────────────────────────────────────
@@ -875,6 +912,47 @@ async function handleApplyRecommendation(rec: AgentRecommendation) {
               <!-- 本地结论 -->
               <div class="text-xs text-slate-400 leading-relaxed border-t border-slate-700/40 pt-2">
                 {{ detectionSummary.summaryText }}
+              </div>
+
+              <!-- AI 短报告区域 -->
+              <div class="mt-3 border-t border-slate-700/40 pt-3">
+                <!-- 报告生成按钮 -->
+                <div v-if="reportState === 'idle' || reportState === 'error'" class="mb-2">
+                  <button
+                    class="pointer-events-auto px-3 py-1.5 rounded-lg border text-xs font-medium
+                           bg-blue-600/15 border-blue-500/40 text-blue-400
+                           hover:bg-blue-600/25 hover:border-blue-400 transition-all"
+                    :disabled="reportLoading"
+                    @click="triggerGenerateReport"
+                  >
+                    <span class="flex items-center gap-1.5">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 2a10 10 0 100 20 10 10 0 000-20z"/>
+                        <path d="M12 6v6l4 2"/>
+                      </svg>
+                      生成 AI 短报告
+                    </span>
+                  </button>
+                </div>
+
+                <!-- 生成中状态 -->
+                <div v-else-if="reportState === 'generating'" class="flex items-center gap-2 text-xs text-blue-400">
+                  <svg class="w-3.5 h-3.5 animate-spin flex-shrink-0" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+                  </svg>
+                  <span>正在生成 AI 报告…</span>
+                </div>
+
+                <!-- 报告展示 -->
+                <div v-else-if="reportState === 'done' && reportText" class="space-y-2">
+                  <div class="flex items-center justify-between">
+                    <span class="text-[10px] font-semibold text-blue-400 tracking-wider uppercase">AI 报告</span>
+                  </div>
+                  <div class="text-xs text-slate-300 leading-relaxed bg-blue-500/5 border border-blue-500/20 rounded-lg px-3 py-2">
+                    {{ reportText }}
+                  </div>
+                </div>
               </div>
             </div>
 
