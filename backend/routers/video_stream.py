@@ -37,11 +37,12 @@ async def video_stream_endpoint(websocket: WebSocket) -> None:
     heartbeat_task: asyncio.Task | None = None
     last_pong_time: float = 0
 
-    # ── Phase 5+: model cold-load tracking ─────────────────────────────────
-    # Tracks which model_ids have already triggered a "model_loading" broadcast
-    # to avoid sending duplicate messages when the same model is re-requested.
-    # Access is single-threaded (only the scheduler's worker thread writes,
-    # only the WS event loop reads).
+    # Capture the WS event loop here (inside the async context) so that the
+    # cold-load callback — which runs inside the thread-pool worker — can safely
+    # schedule work onto it via run_coroutine_threadsafe.
+    # This avoids the "no running event loop" error that would occur if
+    # get_running_loop() were called directly in the worker thread.
+    _ws_loop = asyncio.get_running_loop()
     _cold_loaded_models: set[str] = set()
 
     def _cold_load_callback(model_id: str) -> None:
@@ -51,11 +52,10 @@ async def video_stream_endpoint(websocket: WebSocket) -> None:
         Uses run_coroutine_threadsafe (thread-safe) instead of create_task
         to avoid get_running_loop() in the worker thread.
         """
-        loop = asyncio.get_running_loop()
         coro = websocket.send_text(
             StatusMessage(phase="model_loading", model_id=model_id).model_dump_json()
         )
-        asyncio.run_coroutine_threadsafe(coro, loop)
+        asyncio.run_coroutine_threadsafe(coro, _ws_loop)
 
     # Register the cold-load hook so ModelManager can notify us when a model
     # is first instantiated.  This callback runs inside the worker thread,

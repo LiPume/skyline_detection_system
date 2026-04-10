@@ -140,9 +140,9 @@ def _blocking_inference(frame: VideoFrame) -> InferenceResult:
         frame_id=frame.frame_id,
         timestamp=frame.timestamp,
         inference_time_ms=round(elapsed_ms, 3),
-        session_ms=round(detector_result.session_ms, 3),
-        preprocess_ms=round(detector_result.preprocess_ms, 3),
-        postprocess_ms=round(detector_result.postprocess_ms, 3),
+        session_ms=round(detector_result.session_ms, 3) if detector_result.session_ms is not None else None,
+        preprocess_ms=round(detector_result.preprocess_ms, 3) if detector_result.preprocess_ms is not None else None,
+        postprocess_ms=round(detector_result.postprocess_ms, 3) if detector_result.postprocess_ms is not None else None,
         model_id=selected_model,
         detections=detector_result.detections,
     )
