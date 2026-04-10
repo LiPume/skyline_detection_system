@@ -7,7 +7,7 @@ import { useCanvasRenderer } from '@/composables/useCanvasRenderer'
 import { useModelConfig } from '@/composables/useModelConfig'
 import { wsStatus as globalWsStatus, isGpuActive } from '@/store/systemStatus'
 import { LATENCY_THROTTLE_THRESHOLD_MS, LATENCY_BAR_MAX_MS } from '@/config'
-import { saveDetection }     from '@/api/history'
+import { saveDetection, patchHistoryExtraData } from '@/api/history'
 import { generateReport }     from '@/api/agent'
 import TaskAssistantPanel from '@/components/detection/TaskAssistantPanel.vue'
 
@@ -80,6 +80,16 @@ async function triggerGenerateReport() {
     })
     reportText.value  = resp.reportText
     reportState.value = 'done'
+    // 补写 short_report（+ detection_summary）到历史记录，不影响页面展示
+    if (currentHistoryId.value !== null) {
+      patchHistoryExtraData(currentHistoryId.value, {
+        short_report: resp.reportText,
+        // 同步补写 detection_summary，保证 extra_data 完整性
+        ...(detectionSummary.value ? { detection_summary: detectionSummary.value } : {}),
+      }).catch((e: unknown) => {
+        console.warn('[Detection] 补写历史记录 extra_data 失败（不影响报告显示）:', e)
+      })
+    }
   } catch (e: unknown) {
     reportState.value = 'error'
     showToast('AI 报告生成失败：' + (e instanceof Error ? e.message : '未知错误'), 'error', 5000)
@@ -197,6 +207,7 @@ function resetStats() {
   maxFrameDetections.value = 0
   analysisDuration.value = 0
   saveState.value = 'idle'
+  currentHistoryId.value = null
   // Reset AI report state as well
   reportState.value = 'idle'
   reportText.value  = null
@@ -212,6 +223,8 @@ const videoName = ref<string>('unknown')
 // ── Save state ────────────────────────────────────────────────────────────────
 type SaveState = 'idle' | 'saving' | 'saved' | 'error'
 const saveState = ref<SaveState>('idle')
+// 保存成功后回写的当前历史记录 id，用于后续补写 short_report
+const currentHistoryId = ref<number | null>(null)
 
 async function autoSave() {
   if (totalDetections.value === 0) return  // Skip empty sessions
@@ -226,7 +239,7 @@ async function autoSave() {
       extraData.short_report = reportText.value
     }
 
-    await saveDetection({
+    const record = await saveDetection({
       video_name: videoName.value,
       duration: analysisDuration.value,
       detection_model: buildModelConfig(),
@@ -234,6 +247,8 @@ async function autoSave() {
       total_detections: totalDetections.value,
       ...(Object.keys(extraData).length > 0 ? { extra_data: extraData } : {}),
     })
+    // 记录 id，用于后续补写 short_report
+    currentHistoryId.value = record.id
     saveState.value = 'saved'
     showToast('分析记录已保存到历史记录库', 'success', 3000)
   } catch (e: unknown) {
@@ -701,6 +716,8 @@ function resetToStandby() {
   clearModelHintTimer()
   modelLoadingHint.value = null
   analysisState.value = 'standby'
+  // 显式清空历史记录 id，防止错写
+  currentHistoryId.value = null
 }
 
 // ── Task Assistant recommendation handler ──────────────────────────────────────

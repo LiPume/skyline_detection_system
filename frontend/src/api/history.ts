@@ -102,3 +102,14 @@ export function getVideoUrl(id: number): string {
 export function getDataUrl(id: number): string {
   return `${API_BASE_URL}/api/history/${id}/data`
 }
+
+/**
+ * PATCH /api/history/:id/extra-data — 将 extra_data 中的指定字段合并写入已有记录。
+ * 用于 AI 短报告生成成功后补写回历史记录。
+ */
+export function patchHistoryExtraData(
+  id: number,
+  extraData: Record<string, unknown>,
+): Promise<HistoryRecord> {
+  return request<HistoryRecord>('PATCH', `/api/history/${id}/extra-data`, { extra_data: extraData })
+}

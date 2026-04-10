@@ -153,6 +153,40 @@ async def get_detection_record(
     return DetectionRecordResponse(**record.to_dict())
 
 
+class UpdateExtraDataRequest(BaseModel):
+    """Payload for merging extra_data fields into an existing record."""
+    extra_data: dict
+
+
+@router.patch("/{record_id}/extra-data", response_model=DetectionRecordResponse)
+async def patch_detection_record_extra_data(
+    record_id: int,
+    req: UpdateExtraDataRequest,
+    db: AsyncSession = Depends(get_db),
+) -> DetectionRecordResponse:
+    """
+    Merge new fields into extra_data of an existing detection record.
+
+    仅做顶层 key merge，不覆盖已有字段（除请求中显式传入的 key）。
+    用于：AI 短报告生成成功后补写回历史记录。
+    """
+    result = await db.execute(
+        select(DetectionRecord).where(DetectionRecord.id == record_id)
+    )
+    record = result.scalar_one_or_none()
+    if not record:
+        raise HTTPException(status_code=404, detail=f"Record {record_id} not found")
+
+    # 顶层 key merge：请求中传入的字段直接覆盖，对端已有 key 则保留
+    merged = dict(record.extra_data or {})
+    merged.update(req.extra_data)
+    record.extra_data = merged
+
+    await db.commit()
+    await db.refresh(record)
+    return DetectionRecordResponse(**record.to_dict())
+
+
 @router.delete("/{record_id}", status_code=204)
 async def delete_detection_record(
     record_id: int,
