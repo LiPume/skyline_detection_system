@@ -28,10 +28,13 @@ backend/
 │   ├── registry.py          # 双注册表：MODEL_REGISTRY（前端用） + RUNTIME_CONFIG（执行层用）
 │   ├── model_manager.py     # ModelManager 工厂 + BaseDetector 抽象类 + PTDetector + ONNXDetector
 │   └── history.py           # DetectionRecord SQLAlchemy 模型
-└── routers/
-    ├── video_stream.py      # WebSocket /api/ws/video_stream（含心跳 + 模型冷加载状态通知）
-    ├── history.py           # REST /api/history/*（分页列表/详情/删除/下载视频/下载 JSON）
-    └── models.py            # REST /api/models/*（前端获取模型能力）
+├── routers/
+│   ├── video_stream.py      # WebSocket /api/ws/video_stream（含心跳 + 模型冷加载状态通知）
+│   ├── history.py           # REST /api/history/*（分页列表/详情/删除/下载视频/下载 JSON）
+│   ├── agent.py             # REST /api/agent/*（任务解析 + AI 短报告生成）
+│   └── models.py            # REST /api/models/*（前端获取模型能力）
+└── services/
+    └── agent_service.py     # Agent LLM 调用（SiliconFlow）+ 任务解析 + 短报告生成
 ```
 
 > **注意**：代码中暂未实现 TensorRT（TRTDetector）运行时。`RUNTIME_CONFIG` 中 `runtime_type` 的枚举值 `trt` 和 `openvino` 仅作为预留接口存在。
@@ -191,6 +194,32 @@ ErrorMessage
 [Frontend] 渲染检测结果 + 显示模型就绪提示
 ```
 
+#### 4.x 冷启动异常修复（no running event loop）
+
+**问题**：模型冷加载回调（`_cold_load_callback`）运行在线程池 worker 线程中，直接调用 `get_running_loop()` 会抛出 `no running event loop` 异常。
+
+**修复方案**：在 WebSocket 握手后立即捕获事件循环引用，worker 线程通过 `asyncio.run_coroutine_threadsafe()` 安全调度到主事件循环：
+
+```python
+# 在 websocket handler 入口（async context）中捕获循环
+_ws_loop = asyncio.get_running_loop()
+
+def _cold_load_callback(model_id: str) -> None:
+    coro = websocket.send_text(StatusMessage(...).model_dump_json())
+    asyncio.run_coroutine_threadsafe(coro, _ws_loop)  # 线程安全
+```
+
+**`NoneType doesn't define __round__` 修复**：在 `inference.py` 中，`session_ms` / `preprocess_ms` / `postprocess_ms` 可能为 `None`（某些 runtime 路径），修复方式为：
+
+```python
+inference_time_ms=round(elapsed_ms, 3),  # inference_time_ms 始终有值
+session_ms=round(detector_result.session_ms, 3) if detector_result.session_ms is not None else None,
+preprocess_ms=round(detector_result.preprocess_ms, 3) if ... else None,
+postprocess_ms=round(detector_result.postprocess_ms, 3) if ... else None,
+```
+
+前端接收到的 `session_ms` / `preprocess_ms` / `postprocess_ms` 可能为 `null`，前端已正确处理此情况。
+
 ---
 
 ## 5. 各模块职责详解
@@ -280,6 +309,15 @@ SQLAlchemy 2.0 `DetectionRecord` 模型：
 - 字段：id、created_at、duration、video_name、video_path、model_name、class_counts（JSON）、total_detections、status、thumbnail_path、extra_data（JSON）
 - `to_dict()` 方法将 `extra_data.model_config` 展开为 `detection_model` 字段（兼容旧格式）
 
+**extra_data 字段内容**（JSON，动态写入）：
+| key | 类型 | 说明 |
+|-----|------|------|
+| `model_config` | object | 保存时的模型配置快照（写入时机：保存检测记录） |
+| `detection_summary` | object | 结构化检测摘要（写入时机：保存检测记录） |
+| `short_report` | string | AI 短报告文本（写入时机：AI 报告生成成功后补写） |
+
+> **注意**：`extra_data` 为 JSON 列，可以动态扩展。但 `short_report` 和 `detection_summary` **不作为数据库正式列**，而是作为元数据字段承载。
+
 ### 5.7 `routers/`
 
 | 端点 | 类型 | 作用 |
@@ -291,12 +329,95 @@ SQLAlchemy 2.0 `DetectionRecord` 模型：
 | `/api/history` | GET | 分页查询历史记录（page、limit、status 过滤） |
 | `/api/history/{id}` | GET | 获取单条记录详情 |
 | `/api/history/{id}` | DELETE | 删除记录 |
+| `/api/history/{id}/extra-data` | PATCH | 合并写入 extra_data 字段（AI 报告补写用） |
 | `/api/history/{id}/video` | GET | 下载原始视频文件 |
 | `/api/history/{id}/data` | GET | 导出检测数据 JSON |
+| `/api/agent/parse-task` | POST | 自然语言任务解析 → 结构化推荐（模型 + 类别） |
+| `/api/agent/generate-report` | POST | 基于检测摘要生成 AI 短报告 |
 
 ---
 
-## 6. ONNXDetector 专题
+## 6. Agent 服务系统（Phase 1）
+
+### 6.1 职责边界
+
+Agent 服务**只负责理解与建议**，不触发任何实际检测操作：
+
+- **能做**：自然语言任务解析、模型推荐、类别推荐、短报告生成
+- **不能做**：启动检测、修改系统状态、写数据库
+
+### 6.2 `POST /api/agent/parse-task`
+
+**功能**：将自然语言检测任务解析为结构化推荐。
+
+**输入**：`{ user_text: string }`（用户任务描述）
+
+**输出**：
+```
+{
+  intent: string,
+  recommended_model_id: string,  // 来自 MODEL_REGISTRY
+  target_classes: string[],
+  report_required: boolean,
+  reason: string,
+  confidence: "high" | "medium" | "low"
+}
+```
+
+**LLM 调用**：SiliconFlow API（`deepseek-ai/DeepSeek-V3.2`），超时 30 秒。
+
+**闭集优先级逻辑**：若用户目标类别全部被某个闭集模型覆盖，自动将推荐从 `YOLO-World-V2` 切换为该闭集模型，并附带说明原因。
+
+**异常处理**：
+- `ValueError`：Agent API Key 未配置 → HTTP 503
+- `RuntimeError`：LLM 调用失败或响应解析异常 → HTTP 502
+- `Exception`：其他错误 → HTTP 500
+
+### 6.3 `POST /api/agent/generate-report`
+
+**功能**：基于检测摘要数据，生成中文短报告（100-200 字）。
+
+**输入**（结构化摘要）：
+```
+{
+  modelId, modelLabel, targetClasses,
+  totalDetectionEvents, detectedClassCount,
+  classCounts, maxFrameDetections,
+  durationSec, summaryText, taskPrompt?
+}
+```
+
+**输出**：`{ reportText: string }`
+
+**LLM 调用**：同 `parse-task`，temperature=0.3（比任务解析更低）。
+
+**使用场景**：用户在 Detection 页面完成检测后，手动点击"生成 AI 短报告"按钮触发。**非自动触发**。
+
+**异常处理**：同 `parse-task`。
+
+### 6.4 extra_data 承载方式
+
+AI 报告与检测摘要**不作为数据库正式列**，而是通过 `extra_data` JSON 字段承载：
+
+| 字段 | 写入时机 | 说明 |
+|------|---------|------|
+| `detection_summary` | 保存检测记录时（`autoSave`） | 结构化检测摘要 |
+| `short_report` | AI 报告生成成功后（补写） | AI 生成的中文报告文本 |
+| `model_config` | 保存检测记录时 | 模型配置快照（兼容性字段） |
+
+### 6.5 `PATCH /api/history/{id}/extra-data`
+
+**功能**：合并写入已有历史记录的 `extra_data` 字段。
+
+**语义**：顶层 key merge（`merged.update(req.extra_data)`），请求中传入的字段直接覆盖。
+
+**典型用途**：AI 短报告生成成功后，将 `short_report` 补写入历史记录的 `extra_data`。
+
+> **注意**：该接口**仅做补写**，不修改 `class_counts`、`total_detections` 等核心数据。
+
+---
+
+## 7. ONNXDetector 专题
 
 ### 6.1 为什么用 ONNX
 
@@ -372,7 +493,7 @@ ONNXDetector 内置了逐类 NMS（非极大值抑制）：
 
 ---
 
-## 7. Timing 口径专题（Phase 5）
+## 8. Timing 口径专题（Phase 5）
 
 ### 7.1 后端 timing 字段总览
 
@@ -484,7 +605,7 @@ ONNXDetector 内置了逐类 NMS（非极大值抑制）：
 
 ---
 
-## 8. 日志解读指南
+## 9. 日志解读指南
 
 ### 8.1 模型加载阶段
 
@@ -529,7 +650,7 @@ ONNXDetector 内置了逐类 NMS（非极大值抑制）：
 
 ---
 
-## 9. 扩展指南
+## 10. 扩展指南
 
 ### 9.1 新增 PT 模型
 
@@ -565,7 +686,7 @@ ONNXDetector 内置了逐类 NMS（非极大值抑制）：
 
 ---
 
-## 10. 关键配置位置
+## 11. 关键配置位置
 
 | 配置项 | 位置 |
 |--------|------|
@@ -581,7 +702,7 @@ ONNXDetector 内置了逐类 NMS（非极大值抑制）：
 
 ---
 
-## 11. 已知限制与未实现功能
+## 12. 已知限制与未实现功能
 
 - **TensorRT 尚未实现**：`TRTDetector` 类预留但不存在，`runtime_type="trt"` 仅作占位。
 - **OpenVINO 尚未实现**：`runtime_type="openvino"` 仅作占位。
@@ -589,3 +710,7 @@ ONNXDetector 内置了逐类 NMS（非极大值抑制）：
 - **视频保存**：历史记录中 `video_path` 字段目前由前端写入，后端本身不处理视频文件上传。
 - **ONNX warmup**：ONNXDetector 加载时无 warmup 推理（仅打印 EP 信息），GPU 预热由首次实际推理完成。
 - **YOLOv8-Car PT 路径**：registry 中 `YOLOv8-Car` 已标注为 `runtime_type="onnx"`，不存在 PT 版本。
+- **Agent 服务依赖 LLM API**：任务解析和短报告生成依赖 SiliconFlow API Key（`AGENT_API_KEY` 环境变量），未配置时 `parse-task` 和 `generate-report` 均返回 503 错误。
+- **AI 报告非自动触发**：Detection 页面完成后，用户需手动点击"生成 AI 短报告"按钮才会触发后端 `/api/agent/generate-report`，**不会自动生成**。
+- **数据库 schema 未改造**：AI 报告（`short_report`）和检测摘要（`detection_summary`）通过 `extra_data` JSON 字段承载，不作为数据库正式列。
+- **不支持复杂问答 / 轨迹分析 / RAG**：Agent 服务当前仅支持任务解析和短报告生成，不支持基于历史检测记录的问答、目标轨迹分析或 RAG 增强。

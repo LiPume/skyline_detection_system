@@ -245,6 +245,139 @@ CTA 按钮（底部主要操作区）：
 - 操作按钮：继续播放（绿色渐变）、保存到历史记录库（蓝色边框）
 - 键盘提示：`text-slate-600 text-xs`，`<kbd>` 标签样式
 
+### 4.7 任务助手（TaskAssistantPanel，Phase 1 Agent）
+
+#### 4.7.1 位置与定位
+- 位于右侧 AI 控制台**最顶部**，在视频来源选择之上
+- 组件路径：`components/detection/TaskAssistantPanel.vue`
+- 定位：自然语言任务输入 → AI 解析 → 推荐结果展示
+
+#### 4.7.2 交互流程（三阶段）
+1. **输入阶段**：用户输入自然语言任务描述，按"理解任务"按钮（或 `Ctrl+Enter`）
+2. **加载阶段**：显示阶段性 loading 提示，3 个阶段轮换（1200ms 切换一次）：
+   - "正在理解你的任务"
+   - "正在匹配可用模型与类别"
+   - "正在生成推荐方案"
+   - 超过 8 秒后额外提示"智能解析较慢，你也可以稍后直接手动配置"
+3. **结果展示阶段**：推荐结果展示（模型、确信度、类别、原因、报告建议）
+
+#### 4.7.3 推荐结果展示内容
+| 字段 | 说明 |
+|------|------|
+| 推荐模型 | `recommended_model_id`，以高亮文本展示 |
+| 确信度 | `high`（绿色）/ `medium`（黄色）/ `low`（灰色）三种状态 |
+| 推荐类别 | 蓝色 chip 展示，支持多个 |
+| 报告建议 | 若 `report_required=true`，显示"建议生成检测报告"徽章 |
+| 推荐原因 | 带背景色的原因说明文本 |
+| 应用按钮 | "**应用到当前配置**"按钮，点击后触发 `apply-recommendation` 事件 |
+
+#### 4.7.4 边界与限制
+- 任务助手**不修改现有表单状态**，仅展示推荐结果
+- 推荐结果需用户主动点击"应用到当前配置"才会写入当前配置
+- 解析失败时显示错误提示，用户可继续手动配置
+- 调用后端 `POST /api/agent/parse-task` 接口，依赖 Agent API Key 配置
+
+### 4.8 推荐结果应用到当前配置
+
+#### 4.8.1 handleApplyRecommendation 回调逻辑
+当用户点击"应用到当前配置"按钮时，`Detection.vue` 中的 `handleApplyRecommendation` 执行以下操作：
+
+**第一步：切换模型**
+- 调用 `selectModel(rec.recommended_model_id, postLoadAction)`
+- 在 `postLoadAction` 回调中根据模型类型写入类别配置
+
+**第二步：开放词汇模型（open_vocab）**
+- 直接将 `promptInput` 覆盖为 `rec.target_classes.join(', ')`
+
+**第三步：闭集模型（closed_set）**
+- 清空现有选中状态
+- 按推荐类别覆盖（仅保留模型支持的类别）
+- 调用 `selectedClasses.value = new Set(matched)`
+
+**重要：不会自动启动检测**
+- 应用推荐配置后，用户需手动点击"启动实时分析"
+- 任务助手仅负责配置建议，不涉及检测启动
+
+### 4.9 完成态摘要层（Detection Summary）
+
+#### 4.9.1 触发条件
+- 仅在 `analysisState === 'finished'` 时有值
+- 由 `detectionSummary` computed 属性驱动
+
+#### 4.9.2 数据来源
+全部来自 `Detection.vue` 已有状态，不新建独立数据源：
+
+| 字段 | 来源 |
+|------|------|
+| `modelId` | `selectedModelId` |
+| `modelLabel` | `currentCapabilities?.display_name` |
+| `targetClasses` | `targetClasses`（开放词汇）或 `selectedClasses`（闭集） |
+| `totalDetectionEvents` | `totalDetections` |
+| `detectedClassCount` | `sorted classCounts.length` |
+| `classCounts` | 按次数降序排列的类别统计 |
+| `maxFrameDetections` | `maxFrameDetections` |
+| `durationSec` | `analysisDuration`（有值时） |
+| `summaryText` | 本地规则生成的结论文本 |
+
+#### 4.9.3 UI 展示位置
+- 画布左下角 FINISHED 浮层中
+- 在状态横幅（保存状态）下方
+- 包含：主数据行（检测次数/类别数/最大帧数）、类别分布条、本地结论
+
+#### 4.9.4 本地结论规则（summaryText）
+| 条件 | 结论文本 |
+|------|---------|
+| `totalEvents === 0` | "未检测到任何目标" |
+| `classNum === 1` | "仅检测到 {class}，共 {count} 次" |
+| `classNum > 1` | "检测到 {n} 类目标，{top} 最多（{count} 次）" |
+
+### 4.10 AI 短报告（手动触发）
+
+#### 4.10.1 触发方式
+- **手动触发**，非自动触发
+- 用户在完成态摘要层中点击"**生成 AI 短报告**"按钮
+- 触发 `triggerGenerateReport()` 函数
+
+#### 4.10.2 报告状态机（reportState）
+| 状态 | 触发条件 | UI 行为 |
+|------|---------|---------|
+| `idle` | 初始状态 | 显示"生成 AI 短报告"按钮 |
+| `generating` | 点击按钮后 | 显示 loading 动画 + "正在生成 AI 报告…" |
+| `done` | 报告生成成功 | 展示报告文本区域 |
+| `error` | 报告生成失败 | 显示错误 toast，保留重试按钮 |
+
+#### 4.10.3 生成后流程
+1. 后端返回 `reportText`
+2. `reportText.value` 写入本地状态
+3. **若存在历史记录 ID**（`currentHistoryId !== null`），自动调用 `patchHistoryExtraData` 补写：
+   - `short_report: resp.reportText`
+   - `detection_summary: detectionSummary.value`（同步写入）
+4. 补写失败不影响页面展示（warn 日志）
+
+#### 4.10.4 AI 短报告展示位置
+- 画布左下角 FINISHED 浮层底部
+- 在本地结论文本下方
+- 使用蓝色主题样式：`bg-blue-500/5 border-blue-500/20`
+
+### 4.11 autoSave 与历史记录写入
+
+#### 4.11.1 保存时机
+- 视频播放完毕（`video.ended` 事件）
+- 用户手动停止分析（`stopAnalysis()`）
+- 用户从暂停对话框保存（`saveAndFinish()`）
+
+#### 4.11.2 保存数据口径
+| 字段 | 说明 |
+|------|------|
+| `video_name` | 从文件或摄像头提取 |
+| `duration` | `analysisDuration`（秒） |
+| `detection_model` | `buildModelConfig()` 当前配置 |
+| `class_counts` | 当前 `classCounts` 对象 |
+| `total_detections` | 累计检测次数 |
+| `extra_data` | `detection_summary`（有值时写入） |
+
+> **注意**：`short_report` 在保存时**不会**立即写入 `extra_data`，而是在 AI 报告生成成功后通过 `patchHistoryExtraData` 补写。这是为了避免用户未生成报告时 `extra_data` 中存在空字段。
+
 ---
 
 ## 5) 历史记录库（`/history`，`History.vue`）
@@ -316,7 +449,15 @@ CTA 按钮（底部主要操作区）：
 - 进度条：`flex-1 h-8 bg-slate-800 rounded-lg overflow-hidden`
 - 数量显示：`text-white font-mono font-bold`
 
-### 6.4 JSON 数据预览
+### 6.4 AI 智能总结展示（extra_data 驱动的 AI 报告）
+- **触发条件**：`record.metadata` 中存在 `short_report` 字段且非空
+- 展示位置：在派生指标卡片行之后，本次任务结论摘要之前
+- 样式：`bg-gradient-to-br from-slate-900 to-slate-900/80 rounded-xl border border-blue-500/25 p-5`
+- 内容：由 `extraData?.short_report` 驱动，展示 AI 生成的中文分析报告
+- 若历史记录在生成 AI 报告前保存，则该区域不展示（`hasShortReport === false`）
+- `detection_summary` 字段同样从 `extra_data` 中读取，用于数据完整性校验
+
+### 6.5 JSON 数据预览
 - 代码块：`bg-slate-950 rounded-lg p-4 font-mono text-xs overflow-x-auto max-h-80`
 - 下载按钮：`bg-slate-800 border border-slate-700`，hover `border-purple-600 text-purple-400`
 
@@ -452,9 +593,9 @@ CTA 按钮（底部主要操作区）：
 | 字段名 | 类型 | 说明 |
 |--------|------|------|
 | `inference_time_ms` | `number` | 后端单帧总处理耗时（_blocking_inference 整体） |
-| `session_ms` | `number` | 纯模型 forward 耗时（ONNX: session.run / PT: Results.speed["inference"]） |
-| `preprocess_ms` | `number` | 预处理耗时（ONNX: decode_ms + _preprocess / PT: decode_ms + Results.speed["preprocess"]） |
-| `postprocess_ms` | `number` | 后处理耗时（ONNX: _postprocess / PT: Results.speed["postprocess"]） |
+| `session_ms` | `number\|null` | 纯模型 forward 耗时（ONNX: session.run / PT: Results.speed["inference"]） |
+| `preprocess_ms` | `number\|null` | 预处理耗时（ONNX: decode_ms + _preprocess / PT: decode_ms + Results.speed["preprocess"]） |
+| `postprocess_ms` | `number\|null` | 后处理耗时（ONNX: _postprocess / PT: Results.speed["postprocess"]） |
 | `model_id` | `string` | 本次推理使用的模型 ID（Phase 5+ 冷加载状态通知用） |
 
 > **Phase 5+ 变化**：后端已完整实现所有 timing 字段（inference_time_ms / session_ms / preprocess_ms / postprocess_ms / model_id），前端不再显示 "--" 占位，所有指标均为真实数据。
@@ -629,14 +770,47 @@ send() 失败时（socket 未 OPEN）递增，供诊断使用。
 
 | 方法 | 端点 | 说明 |
 |------|------|------|
-| `saveDetection(payload)` | POST `/api/history` | 保存检测记录 |
+| `saveDetection(payload)` | POST `/api/history` | 保存检测记录（包含 extra_data） |
 | `listHistory({page, limit, status})` | GET `/api/history` | 分页查询历史记录 |
 | `getHistory(id)` | GET `/api/history/{id}` | 获取单条记录详情 |
 | `deleteHistory(id)` | DELETE `/api/history/{id}` | 删除记录 |
 | `getVideoUrl(id)` | GET `/api/history/{id}/video` | 获取视频下载 URL（`FileResponse`） |
 | `getDataUrl(id)` | GET `/api/history/{id}/data` | 获取 JSON 下载 URL（`StreamingResponse`） |
+| `patchHistoryExtraData(id, extraData)` | PATCH `/api/history/{id}/extra-data` | **合并写入** extra_data 字段（用于 AI 报告补写） |
 
-### 13.2 types/skyline.ts
+> **`patchHistoryExtraData` 语义**：顶层 key merge（`Object.assign` 行为），请求中传入的字段直接覆盖已有值。用于 AI 短报告生成成功后，将 `short_report` 和 `detection_summary` 补写入历史记录的 `extra_data` 字段。
+
+### 13.2 api/agent.ts
+
+| 方法 | 端点 | 说明 |
+|------|------|------|
+| `parseTask(userText)` | POST `/api/agent/parse-task` | 自然语言任务解析，返回结构化推荐 |
+| `generateReport(payload)` | POST `/api/agent/generate-report` | 基于检测摘要生成 AI 短报告 |
+
+#### parseTask 请求/响应
+```
+请求：{ user_text: string }
+响应：{
+  intent: string,
+  recommended_model_id: string,
+  target_classes: string[],
+  report_required: boolean,
+  reason: string,
+  confidence: "high" | "medium" | "low"
+}
+```
+
+#### generateReport 请求/响应
+```
+请求：{
+  modelId, modelLabel, targetClasses, totalDetectionEvents,
+  detectedClassCount, classCounts, maxFrameDetections,
+  durationSec, summaryText, taskPrompt?
+}
+响应：{ reportText: string }
+```
+
+### 13.3 types/skyline.ts
 
 关键类型：VideoFrame、InferenceResult（含完整 timing 字段 + model_id）、Detection、ErrorMessage、ModelStatusMessage、ServerMessage、ModelConfig、ModelCapabilities、HistoryRecord（与 api/history.ts 共用）。
 
