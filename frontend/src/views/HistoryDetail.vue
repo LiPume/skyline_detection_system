@@ -2,6 +2,7 @@
 import { ref, onMounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { getHistory, getDataUrl, type HistoryRecord } from '@/api/history'
+import type { ExtraData } from '@/types/skyline'
 
 // ── Route & Navigation ─────────────────────────────────────────────────────────
 const route = useRoute()
@@ -223,6 +224,29 @@ const modeTagConfig = computed(() => {
   if (type === 'open_vocab') return { cls: 'bg-violet-500/15 border-violet-500/30 text-violet-400', label: '开放词汇' }
   if (type === 'closed_set') return { cls: 'bg-blue-500/15 border-blue-500/30 text-blue-400', label: '固定类别' }
   return { cls: 'bg-slate-700/40 border-slate-600/40 text-slate-400', label: '未知' }
+})
+
+// 14. extra_data 解析（来自 Detection 页保存的 AI 短报告与检测摘要）
+const extraData = computed<ExtraData | null>(() => {
+  const meta = record.value?.metadata
+  if (!meta || typeof meta !== 'object') return null
+  return meta as unknown as ExtraData
+})
+
+// 15. AI 短报告是否存在
+const hasShortReport = computed<boolean>(() => {
+  const text = extraData.value?.short_report
+  return typeof text === 'string' && text.length > 0
+})
+
+// 16. AI 短报告文本
+const shortReportText = computed<string>(() => {
+  return extraData.value?.short_report ?? ''
+})
+
+// 17. detection_summary 是否存在
+const hasDetectionSummary = computed<boolean>(() => {
+  return extraData.value?.detection_summary != null
 })
 </script>
 
@@ -461,6 +485,32 @@ const modeTagConfig = computed(() => {
           </p>
         </div>
 
+      </div>
+
+      <!-- ──────────────────────────────────────────────────────────────── -->
+      <!-- AI 智能总结（仅当 extra_data 存在时展示）                         -->
+      <!-- ──────────────────────────────────────────────────────────────── -->
+      <div
+        v-if="hasShortReport"
+        class="bg-gradient-to-br from-slate-900 to-slate-900/80 rounded-xl border border-blue-500/25 p-5"
+      >
+        <div class="flex items-center gap-3 mb-4">
+          <div class="p-2 rounded-lg bg-blue-500/15">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-blue-400">
+              <path d="M12 2a10 10 0 100 20 10 10 0 000-20z"/>
+              <path d="M12 6v6l4 2"/>
+            </svg>
+          </div>
+          <div>
+            <h3 class="text-white font-semibold text-sm">AI 智能总结</h3>
+            <p class="text-slate-500 text-xs mt-0.5">由 AI 生成的检测分析报告</p>
+          </div>
+        </div>
+        <div
+          class="text-slate-300 text-sm leading-relaxed bg-blue-500/5 border border-blue-500/20 rounded-lg px-4 py-3"
+        >
+          {{ shortReportText }}
+        </div>
       </div>
 
       <!-- ──────────────────────────────────────────────────────────────── -->

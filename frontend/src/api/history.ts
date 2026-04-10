@@ -29,7 +29,7 @@ export interface SaveDetectionPayload {
   total_detections: number
   video_path?: string
   thumbnail_path?: string
-  metadata?: Record<string, unknown>
+  extra_data?: Record<string, unknown>
 }
 
 export interface HistoryListResponse {

@@ -165,3 +165,25 @@ export interface AgentRecommendation {
   reason: string
   confidence: AgentConfidence
 }
+
+// ════════════════════════════════════════════════════════════════════════════════
+// HISTORY EXTRA_DATA TYPES
+// extra_data 字段类型定义，承载 AI 短报告与检测摘要
+// ════════════════════════════════════════════════════════════════════════════════
+
+export interface DetectionSummary {
+  modelId: string
+  modelLabel: string
+  targetClasses: string[]
+  totalDetectionEvents: number
+  detectedClassCount: number
+  classCounts: Array<{ className: string; count: number }>
+  maxFrameDetections: number
+  durationSec: number | null
+  summaryText: string
+}
+
+export interface ExtraData {
+  detection_summary?: DetectionSummary
+  short_report?: string
+}

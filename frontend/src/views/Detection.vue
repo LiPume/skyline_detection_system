@@ -217,12 +217,22 @@ async function autoSave() {
   if (totalDetections.value === 0) return  // Skip empty sessions
   saveState.value = 'saving'
   try {
+    // 合并 extra_data：复用传入的 extra_data（如果有），再补充本次新增字段
+    const extraData: Record<string, unknown> = {}
+    if (detectionSummary.value) {
+      extraData.detection_summary = detectionSummary.value
+    }
+    if (reportText.value) {
+      extraData.short_report = reportText.value
+    }
+
     await saveDetection({
       video_name: videoName.value,
       duration: analysisDuration.value,
       detection_model: buildModelConfig(),
       class_counts: { ...classCounts.value },
       total_detections: totalDetections.value,
+      ...(Object.keys(extraData).length > 0 ? { extra_data: extraData } : {}),
     })
     saveState.value = 'saved'
     showToast('分析记录已保存到历史记录库', 'success', 3000)
