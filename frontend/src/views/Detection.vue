@@ -31,6 +31,19 @@ const showPauseDialog = ref(false)
 
 // ── Toast notification stack ──────────────────────────────────────────────────
 interface Toast { id: number; type: 'error' | 'warn' | 'success'; text: string }
+
+// ── 检测摘要层（完成态展示）────────────────────────────────────────────────────
+interface DetectionSummary {
+  modelId: string
+  modelLabel: string
+  targetClasses: string[]
+  totalDetectionEvents: number
+  detectedClassCount: number
+  classCounts: Array<{ className: string; count: number }>
+  maxFrameDetections: number
+  durationSec: number | null
+  summaryText: string
+}
 const toasts = ref<Toast[]>([])
 let toastSeq = 0
 function showToast(text: string, type: Toast['type'] = 'error', ms = 4000) {
@@ -586,6 +599,50 @@ const stateInfo = computed(() => ({
   finished:     { label: 'COMPLETE',  color: 'text-cyan-400',    bg: 'bg-cyan-500/10   border-cyan-500/40' },
 }[analysisState.value]))
 
+/**
+ * 检测完成态结构化摘要
+ * 仅在 finished 态时有值，用于摘要展示层。
+ * 数据全部来自 Detection.vue 已有状态，不新建独立数据源。
+ */
+const detectionSummary = computed<DetectionSummary | null>(() => {
+  if (analysisState.value !== 'finished') return null
+
+  const sorted = Object.entries(classCounts.value)
+    .map(([className, count]) => ({ className, count }))
+    .sort((a, b) => b.count - a.count)
+
+  const modelLabel = currentCapabilities.value?.display_name ?? selectedModelId.value ?? '未知模型'
+
+  const totalEvents = totalDetections.value
+  const hasAny = totalEvents > 0
+
+  let summaryText = '未检测到任何目标'
+  if (hasAny) {
+    const topClass = sorted[0]?.className ?? ''
+    const topCount = sorted[0]?.count ?? 0
+    const classNum = sorted.length
+    if (classNum === 1) {
+      summaryText = `仅检测到 ${topClass}，共 ${topCount} 次`
+    } else {
+      summaryText = `检测到 ${classNum} 类目标，${topClass} 最多（${topCount} 次）`
+    }
+  }
+
+  return {
+    modelId: selectedModelId.value ?? '',
+    modelLabel,
+    targetClasses: targetClasses.length > 0
+      ? [...targetClasses]
+      : Array.from(selectedClasses.value),
+    totalDetectionEvents: totalEvents,
+    detectedClassCount: sorted.length,
+    classCounts: sorted,
+    maxFrameDetections: maxFrameDetections.value,
+    durationSec: analysisDuration.value > 0 ? analysisDuration.value : null,
+    summaryText,
+  }
+})
+
 // ── Video Reset ─────────────────────────────────────────────────────────────────
 
 function resetToStandby() {
@@ -746,10 +803,12 @@ async function handleApplyRecommendation(rec: AgentRecommendation) {
         <!-- FINISHED overlay -->
         <Transition name="fade">
           <div v-if="analysisState === 'finished'"
-               class="absolute bottom-5 left-5 pointer-events-none">
+               class="absolute bottom-5 left-5 pointer-events-none flex flex-col gap-2">
+
+            <!-- 状态横幅 -->
             <div class="flex items-center gap-3 px-4 py-2.5 rounded-xl
                         bg-slate-950/85 border border-cyan-500/30 backdrop-blur">
-              <span class="text-cyan-400 text-lg leading-none">{{ saveState === 'saved' ? '✓' : '✓' }}</span>
+              <span class="text-cyan-400 text-lg leading-none">✓</span>
               <div>
                 <div class="text-cyan-400 text-sm font-medium tracking-wide">ANALYSIS COMPLETE</div>
                 <div class="text-slate-500 text-xs mt-0.5">
@@ -768,8 +827,59 @@ async function handleApplyRecommendation(rec: AgentRecommendation) {
                 </div>
               </div>
             </div>
+
+            <!-- 结构化摘要卡片 -->
+            <div v-if="detectionSummary"
+                 class="pointer-events-none bg-slate-950/90 border border-slate-700/60 backdrop-blur rounded-xl px-4 py-3">
+
+              <!-- 摘要标题行 -->
+              <div class="flex items-center justify-between mb-2.5">
+                <span class="text-xs font-semibold text-slate-300 tracking-wider uppercase">检测摘要</span>
+                <span class="text-cyan-400 text-xs font-mono font-medium">{{ detectionSummary.modelLabel }}</span>
+              </div>
+
+              <!-- 主数据行 -->
+              <div class="grid grid-cols-3 gap-3 mb-2.5">
+                <div class="text-center">
+                  <div class="text-lg font-bold font-mono text-blue-400">{{ detectionSummary.totalDetectionEvents }}</div>
+                  <div class="text-[10px] text-slate-600 mt-0.5">检测次数</div>
+                </div>
+                <div class="text-center border-x border-slate-700/40">
+                  <div class="text-lg font-bold font-mono text-emerald-400">{{ detectionSummary.detectedClassCount }}</div>
+                  <div class="text-[10px] text-slate-600 mt-0.5">类别数</div>
+                </div>
+                <div class="text-center">
+                  <div class="text-lg font-bold font-mono text-amber-400">{{ detectionSummary.maxFrameDetections }}</div>
+                  <div class="text-[10px] text-slate-600 mt-0.5">最大帧数</div>
+                </div>
+              </div>
+
+              <!-- 类别分布条 -->
+              <div v-if="detectionSummary.classCounts.length > 0" class="mb-2">
+                <div class="flex flex-wrap gap-1">
+                  <span
+                    v-for="item in detectionSummary.classCounts.slice(0, 6)"
+                    :key="item.className"
+                    class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-slate-800 border border-slate-700/60 text-slate-300 font-mono"
+                  >
+                    <span class="text-slate-500">{{ item.className }}</span>
+                    <span class="text-blue-400">{{ item.count }}</span>
+                  </span>
+                  <span
+                    v-if="detectionSummary.classCounts.length > 6"
+                    class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] bg-slate-800 border border-slate-700/60 text-slate-500"
+                  >+{{ detectionSummary.classCounts.length - 6 }}</span>
+                </div>
+              </div>
+
+              <!-- 本地结论 -->
+              <div class="text-xs text-slate-400 leading-relaxed border-t border-slate-700/40 pt-2">
+                {{ detectionSummary.summaryText }}
+              </div>
+            </div>
+
             <button
-              class="mt-2 pointer-events-auto px-3 py-1.5 rounded-lg border text-xs font-medium
+              class="pointer-events-auto self-start px-3 py-1.5 rounded-lg border text-xs font-medium
                      bg-slate-800/90 border-slate-600 text-slate-300
                      hover:bg-slate-700 hover:border-slate-500 transition-all"
               @click="resetToStandby"
