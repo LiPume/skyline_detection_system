@@ -469,17 +469,36 @@ CTA 按钮（底部主要操作区）：
 
 ---
 
-## 7) 模型评估页（`/performance`，`Performance.vue`）
-### 7.1 页面容器与布局
-- 根容器：`h-full bg-slate-950 flex flex-col overflow-hidden`
-- 顶部标题区：`px-8 py-5 flex-shrink-0 border-b border-slate-800`
-  - 主标题 `text-base font-semibold text-white`，子标题 `text-xs text-slate-500`
-  - 右侧按钮：导出报告（outline）、查看测试报告（蓝色填充）
-- Tab 导航：`px-8 pt-4 pb-0`
-  - 容器：`flex gap-1 bg-slate-900/60 p-1 rounded-xl w-fit border border-slate-800`
-  - 四个 Tab：总览、训练过程、标准评测、类别分析
+## 7) 模型评测页（`/performance`，`Performance.vue`）
 
-### 7.2 总览 Tab（Overview）
+> 定位：模型评测结果与案例分析页，用于比赛展示、PPT 截图、答辩讲解
+> 数据来源：`frontend/src/data/performanceReport.mock.ts`
+> 后续替换：`report.json` → 替换 meta/summaryMetrics/classMetrics/scenarios/caseStudies/conclusion；`train_history.csv` → 替换 trainingHistory/trainingSummary
+
+### 7.1 页面定位与数据口径
+
+本页面为**单页滚动结构**（非 Tab 切换），由 5 个纵向模块组成：
+
+| 模块序号 | 模块标题 | 说明 |
+|----------|----------|------|
+| 模块 1 | 评测总览 | 页面最重要区域：顶部指标卡 + 模型配置 + 训练摘要 |
+| 模块 2 | 标准评测结果 | PR 曲线展示 + AP 详细数据表格 + 整体评测结论 |
+| 模块 3 | 场景鲁棒性分析 | 四类场景（白天城区 / 夜间低照度 / 高空密集小目标 / 复杂背景）的性能评估 |
+| 模块 4 | 典型案例分析 | 三个典型案例卡片（昼间城区 / 夜间停车场 / 高空园区），点击可弹出详情模态框 |
+| 模块 5 | 轻量训练摘要 | 损失收敛曲线 + 精度演进曲线 + 学习率曲线（降级处理，作为辅助信息） |
+
+数据层说明：
+- **所有数据均来自 `performanceReport.mock.ts`（Vue ref 内联 mock）**，无任何真实后端 API 调用
+- **artifacts.prCurveImage**：使用真实静态图片 `/metrics/PR_curve.png`，带 `@error` fallback 占位符
+- **scenarios[].sampleImage**：使用 demo 视频封面图占位（`/demo/demo_flight.png`、`/demo/night_car.png`、`/demo/park_car.png`）
+- **caseStudies[].coverImage / videoPath**：使用 demo 视频封面图和 demo 视频路径占位，后续可替换为真实评测视频
+
+后续可替换为：
+- `report.json` → 替换 meta / summaryMetrics / classMetrics / scenarios / caseStudies / conclusion
+- `train_history.csv` → 替换 trainingHistory / trainingSummary
+- 真实评测视频替换 caseStudies 中的 demo 视频路径
+
+### 7.2 评测总览（模块 1）
 - 顶部指标卡网格：`grid grid-cols-6 gap-4`
   - mAP@0.5：`text-3xl text-blue-400`，进度条 `bg-blue-500`
   - mAP@0.5:0.95：条件颜色（≥0.5 绿色，否则黄色）
@@ -497,7 +516,38 @@ CTA 按钮（底部主要操作区）：
   - 横向条形图 + 排名数字
   - 颜色条件：≥75% 绿色，≥50% 黄色，<50% 红色
 
-### 7.3 训练过程 Tab（Train）
+### 7.3 标准评测结果（模块 2）
+- PR 曲线展示区：
+  - `rounded-xl border border-slate-800 bg-slate-900/50`
+  - 图片展示：`max-w-2xl rounded-lg overflow-hidden`，支持 `@error` 处理
+  - 失败占位：显示 "当前未加载到 P-R 曲线图像，可于后续补充标准评测图像资源" + 重试按钮
+- AP 详细数据表格：
+  - 表头：`px-5 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider`
+  - 单元格：带颜色编码的 AP 值
+  - 达标状态：≥75% 显示 "达标"（绿色），否则 "待优化"（黄色）
+- 整体评测结论：
+  - 四栏指标卡 + 评测场景描述
+  - 结论文本：`p-4 rounded-lg bg-slate-800/30 border border-slate-700/50`
+
+### 7.4 场景鲁棒性分析（模块 3）
+- 2x2 四格场景卡片：`grid grid-cols-2 gap-4`
+- 每个场景卡：
+  - 样本图：`rounded-lg overflow-hidden h-32`
+  - 状态徽章：良好（绿色）/ 一般（黄色）/ 待优化（红色）
+  - 场景名称 + 描述
+
+### 7.5 典型案例分析（模块 4）
+- 三栏案例卡片：`grid grid-cols-3 gap-4`
+- 每个案例卡：
+  - 封面图：`rounded-lg overflow-hidden h-36`
+  - 场景标签 + 模型名称
+  - 总结摘要
+  - "查看详情" 按钮
+- 点击按钮弹出案例详情模态框：
+  - 场景描述 / 模型表现 / 优势 / 局限 / 代表性说明
+  - 封面大图 + 视频播放（若 videoPath 存在）
+
+### 7.6 轻量训练摘要（模块 5）
 - 说明区 + 图例：`flex items-center justify-between`
 - 损失收敛曲线卡片：
   - SVG 图表：支持平滑曲线（`buildSmoothPath`）和面积填充（`buildAreaPath`）
@@ -512,41 +562,16 @@ CTA 按钮（底部主要操作区）：
   - LR 曲线：`pg0`(青) / `pg1`(蓝) / `pg2`(靛蓝)
   - 摘要卡：显示最佳轮次各项指标
 
-### 7.4 标准评测 Tab（Eval）
-- PR 曲线展示区：
-  - `rounded-xl border border-slate-800 bg-slate-900/50`
-  - 图片展示：`max-w-2xl rounded-lg overflow-hidden`，支持 `@error` 处理
-  - 失败占位：显示 "PR 曲线预留区" + 重试按钮
-- AP 详细数据表格：
-  - 表头：`px-5 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider`
-  - 单元格：带颜色编码的 AP 值
-  - 达标状态：≥75% 显示 "达标"（绿色），否则 "待优化"（黄色）
-- 整体评测结论：
-  - 四栏指标卡 + 评测场景描述
-  - 结论文本：`p-4 rounded-lg bg-slate-800/30 border border-slate-700/50`
+### 7.7 与原文档描述的对照说明
 
-### 7.5 类别分析 Tab（Class）
-- 类别 AP@0.5 排行：
-  - 排名样式：🥇 金色 / 🥈 银色 / 🥉 铜色 / 普通灰色
-  - 条形图 + 数值
-  - AP@0.5:0.95 分隔区域（半透明）
-- 类别样本统计：
-  - 五栏网格：`grid grid-cols-5 gap-4`
-  - 样本量比例条：`h-1 bg-slate-700 rounded-full`
-- 类别表现分析卡：
-  - 条件边框/背景：`emerald/yellow/red` 根据 AP 值
-  - 类别徽章：首字母缩写 + 背景色
-  - P/R/AP 三栏数据
-  - 备注文本：对应语义色边框/背景
+**原文档描述（已过时）**：
+- frontend.md 原描述为 "四个 Tab：总览、训练过程、标准评测、类别分析"
+- 原描述以 Tab 切换方式描述，与当前代码实际结构不符
 
-### 7.6 当前状态（数据层）
-
-**所有数据均为硬编码内联 mock 数据**，无任何真实 API 调用：
-
-- 训练历史：`trainHistory` ref 包含 25 条 epoch 关键节点数据（1/2/3/.../300），来自 `yolo_car_results.csv` 解析结果
-- 评测数据：`summaryMetrics`、`evaluationResult`、`classMetrics` 均为 Vue ref 内的硬编码值
-- PR 曲线：使用静态图片 `/metrics/pr_curve.png`，带 `@error` fallback 占位符
-- 无训练数据存储管道，无评测结果回填机制，无真实 API 连接
+**当前实际结构（2026-04-11）**：
+- Performance.vue 为**单页滚动结构**，由 5 个纵向模块组成，无 Tab 导航
+- 内容在单个可滚动区域内按顺序展示
+- 评测总览为最重要区域，位于页面最上方
 
 ---
 
