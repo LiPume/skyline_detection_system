@@ -65,6 +65,7 @@ export type PerformanceReport = {
     modelName: string
     summary: string
     videoPath: string
+    coverImage: string
     analysis: {
       sceneDescription: string
       modelPerformance: string
@@ -186,32 +187,32 @@ export const performanceReport: PerformanceReport = {
     },
   ],
   artifacts: {
-    prCurveImage: '/metrics/pr_curve.png',
+    prCurveImage: '/metrics/PR_curve.png',
   },
   scenarios: [
     {
       name: '白天城市道路',
       description: '光照充足、视野开阔的城市道路环境，车辆目标尺度适中，背景相对简单',
       performance: 'good',
-      sampleImage: '',
+      sampleImage: '/demo/demo_flight.png',
     },
     {
       name: '夜间低照度',
       description: '夜间或黄昏时段，低照度条件下车辆灯光干扰明显，目标对比度降低',
       performance: 'medium',
-      sampleImage: '',
+      sampleImage: '/demo/night_car.png',
     },
     {
       name: '高空密集小目标',
       description: '无人机高空俯拍视角，车辆目标像素占比小，多目标密集分布场景',
       performance: 'medium',
-      sampleImage: '',
+      sampleImage: '/demo/park_car.png',
     },
     {
       name: '复杂背景 / 遮挡',
       description: '停车场、建筑物遮挡、树木阴影等复杂背景下目标被部分遮挡的检测场景',
       performance: 'weak',
-      sampleImage: '',
+      sampleImage: '/demo/park_car.png',
     },
   ],
   caseStudies: [
@@ -222,6 +223,7 @@ export const performanceReport: PerformanceReport = {
       modelName: 'YOLOv8s-Car',
       summary: '模型在昼间城区场景下展现出良好的检测稳定性，mAP@0.5 达到 82.1%，有效区分车辆与背景',
       videoPath: '/demo/demo_flight.mp4',
+      coverImage: '/demo/demo_flight.png',
       analysis: {
         sceneDescription: '无人机俯拍城市主干道，包含多车道行驶车辆、行人与骑行者，交通流密集，目标尺度从小到大均有分布',
         modelPerformance: '在昼间城区场景中，YOLOv8s-Car 对车辆目标检测的置信度普遍在 0.8 以上，误检率低，定位框贴合度好',
@@ -244,6 +246,7 @@ export const performanceReport: PerformanceReport = {
       modelName: 'YOLOv8s-Car',
       summary: '夜间低照度环境下检测精度有所下降，但仍满足基本任务需求，漏检主要集中在远距离小目标',
       videoPath: '/demo/night_car.mp4',
+      coverImage: '/demo/night_car.png',
       analysis: {
         sceneDescription: '夜间园区停车场环境，车灯与环境光源混合，光照条件复杂，存在强曝光与暗区并存的挑战',
         modelPerformance: '夜间场景下检测置信度整体下降至 0.6~0.75，误检率约 8%，漏检集中在画面边缘区域',
@@ -267,6 +270,7 @@ export const performanceReport: PerformanceReport = {
       modelName: 'YOLOv8s-Car',
       summary: '高空俯拍多目标密集分布场景中，模型对小尺度目标的召回能力存在瓶颈，但核心目标检测准确',
       videoPath: '/demo/park_car.mp4',
+      coverImage: '/demo/park_car.png',
       analysis: {
         sceneDescription: '园区停车场高空俯拍视角，车辆密集分布，行人与车辆尺度差异大，部分目标被建筑物或树木遮挡',
         modelPerformance: '大尺度车辆 AP 超过 0.85，但小尺度目标（占画面 < 1%）召回率仅约 0.55，整体 mAP@0.5 仍维持在 0.82',
@@ -322,7 +326,7 @@ export const performanceReport: PerformanceReport = {
     finalRecall: 0.767,
   },
   conclusion: {
-    overallSummary: 'YOLOv8s-Car 在自建航拍车辆数据集上经过 300 epochs 训练后，mAP@0.5 达到 82.1%，满足赛题 mAP ≥ 0.80 的基线要求。在 RTX 3080 上纯推理 FPS 达 25.3，满足实时处理需求。模型在昼间城区场景表现优秀，夜间及高空小目标场景存在一定优化空间，但整体具备在实际无人机巡逻任务中部署的能力。',
+    overallSummary: 'YOLOv8s-Car 在自建航拍车辆数据集上经过 300 epochs 训练，mAP@0.5 达到 82.1%，满足赛题指标要求（mAP ≥ 0.80）。在 RTX 3080 上纯推理 FPS 达 25.3，满足实时处理要求（≥ 25 FPS）。已覆盖白天城区道路、夜间低照度、高空密集小目标、复杂遮挡等典型无人机场景，整体具备在实际航拍巡逻任务中部署的能力。',
     strengths: [
       '昼间城区场景检测精度高，mAP@0.5 达 82.1%',
       '模型推理速度满足实时处理要求（25.3 FPS）',

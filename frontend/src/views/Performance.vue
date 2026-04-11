@@ -22,19 +22,13 @@ function metricColor(value: number): string {
   return 'text-red-400'
 }
 
-function metricBg(value: number): string {
-  if (value >= 0.75) return 'bg-emerald-500/10 border-emerald-500/25'
-  if (value >= 0.5)  return 'bg-yellow-500/10 border-yellow-500/25'
-  return 'bg-red-500/10 border-red-500/25'
-}
-
 function apColor(value: number): string {
   if (value >= 0.75) return '#34d399'
   if (value >= 0.5)  return '#fbbf24'
   return '#f87171'
 }
 
-function scenarioColor(level: 'good' | 'medium' | 'weak'): string {
+function scenarioColor(level: 'good' | 'medium' | 'weak') {
   if (level === 'good')   return { badge: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/25', dot: 'bg-emerald-400', label: '良好' }
   if (level === 'medium') return { badge: 'bg-yellow-500/15 text-yellow-400 border-yellow-500/25', dot: 'bg-yellow-400', label: '一般' }
   return { badge: 'bg-red-500/15 text-red-400 border-red-500/25', dot: 'bg-red-400', label: '待优化' }
@@ -63,6 +57,7 @@ const CHART_H = 180
 const PAD = 30
 
 function buildSmoothPath(data: typeof report.value.trainingHistory, key: string, width: number, height: number, padding: number): string {
+  if (!data || !data.length) return ''
   const all = data
   const vals = all.map(e => (e as any)[key])
   const minVal = Math.min(...vals)
@@ -112,6 +107,7 @@ const metricGridLines = computed(() => {
 })
 
 const epochLabels = computed(() => {
+  if (!report.value.trainingHistory?.length) return []
   const epochs = report.value.trainingHistory.map(e => e.epoch)
   const min = Math.min(...epochs)
   const max = Math.max(...epochs)
@@ -126,9 +122,14 @@ const epochLabels = computed(() => {
 })
 
 const bestEpochData = computed(() => {
+  if (!report.value.trainingHistory?.length) return null
   const best = report.value.trainingHistory.find(e => e.epoch === report.value.trainingSummary?.bestEpoch)
   return best ?? null
 })
+
+const hasTrainingHistory = computed(() =>
+  Array.isArray(report.value.trainingHistory) && report.value.trainingHistory.length > 0
+)
 </script>
 
 <template>
@@ -171,8 +172,8 @@ const bestEpochData = computed(() => {
               <div class="h-full rounded-full bg-blue-500" :style="{ width: (report.summaryMetrics.map50 * 100) + '%' }"></div>
             </div>
             <div class="mt-1.5 flex items-center gap-1">
-              <span class="text-xs text-emerald-400">✓ 达标</span>
-              <span class="text-xs text-slate-600">/ 基线≥80%</span>
+              <span class="text-xs text-emerald-400">✓ 达到赛题要求</span>
+              <span class="text-xs text-slate-600">/ 指标≥80%</span>
             </div>
           </div>
 
@@ -202,7 +203,7 @@ const bestEpochData = computed(() => {
           <div class="rounded-xl border p-4 bg-slate-900/50 border-slate-800">
             <div class="text-xs text-slate-500 mb-1.5">纯推理 FPS</div>
             <div class="text-3xl font-bold text-cyan-400 leading-none">{{ report.summaryMetrics.fpsInfer.toFixed(1) }}</div>
-            <div class="mt-2 text-xs text-emerald-400">✓ 实时处理</div>
+            <div class="mt-2 text-xs text-emerald-400">✓ 达到实时处理要求</div>
             <div class="text-xs text-slate-600 mt-0.5">/ 要求≥25 FPS</div>
           </div>
 
@@ -336,8 +337,8 @@ const bestEpochData = computed(() => {
                 <line x1="6" y1="20" x2="6" y2="14"/>
                 <line x1="2" y1="20" x2="22" y2="20"/>
               </svg>
-              <p class="text-sm font-medium text-slate-500 mb-1">PR 曲线</p>
-              <p class="text-xs text-slate-600">待接入真实评测结果图</p>
+              <p class="text-sm font-medium text-slate-500 mb-1">P-R 曲线</p>
+              <p class="text-xs text-slate-600">当前未加载到 P-R 曲线图像，可于后续补充标准评测图像资源</p>
               <button
                 class="mt-3 px-3 py-1.5 rounded-lg text-xs border border-slate-700 text-slate-500
                        hover:border-slate-500 hover:text-slate-300 transition-all"
@@ -402,7 +403,7 @@ const bestEpochData = computed(() => {
                 <th class="px-5 py-3 text-right text-xs font-medium text-slate-500 uppercase tracking-wider">Precision</th>
                 <th class="px-5 py-3 text-right text-xs font-medium text-slate-500 uppercase tracking-wider">Recall</th>
                 <th class="px-5 py-3 text-right text-xs font-medium text-slate-500 uppercase tracking-wider">样本数</th>
-                <th class="px-5 py-3 text-right text-xs font-medium text-slate-500 uppercase tracking-wider">达标</th>
+                <th class="px-5 py-3 text-right text-xs font-medium text-slate-500 uppercase tracking-wider">达指标</th>
               </tr>
             </thead>
             <tbody>
@@ -440,7 +441,7 @@ const bestEpochData = computed(() => {
                     :class="cls.ap50 >= 0.75 ? 'bg-emerald-500/15 text-emerald-400' : 'bg-yellow-500/15 text-yellow-400'"
                   >
                     <span class="w-1.5 h-1.5 rounded-full bg-current"></span>
-                    {{ cls.ap50 >= 0.75 ? '达标' : '待优化' }}
+                    {{ cls.ap50 >= 0.75 ? '达指标' : '待优化' }}
                   </span>
                 </td>
               </tr>
@@ -475,12 +476,19 @@ const bestEpochData = computed(() => {
               </span>
             </div>
             <p class="text-xs text-slate-400 leading-relaxed">{{ scenario.description }}</p>
+            <!-- 场景示例图 -->
+            <div v-if="scenario.sampleImage" class="mt-3 rounded-md overflow-hidden h-36">
+              <img :src="scenario.sampleImage" :alt="scenario.name + ' 示例'" class="w-full h-full object-cover" />
+            </div>
+            <div v-else class="mt-3 rounded-md overflow-hidden h-8 bg-slate-800/60 border border-slate-700/40 flex items-center justify-center">
+              <span class="text-xs text-slate-600">{{ scenario.name }}</span>
+            </div>
           </div>
         </div>
       </div>
 
       <!-- ╔══════════════════════════════════════════════════════════════════════╗ -->
-      <!-- ║  模块 4：典型案例分析（3 个视频占位）                                  ║ -->
+      <!-- ║  模块 4：典型案例分析                                                  ║ -->
       <!-- ╚══════════════════════════════════════════════════════════════════════╝ -->
 
       <div class="rounded-xl border border-slate-800 bg-slate-900/50 overflow-hidden">
@@ -494,24 +502,7 @@ const bestEpochData = computed(() => {
             :key="cs.id"
             class="rounded-lg border border-slate-700 bg-slate-800/30 overflow-hidden flex flex-col hover:border-blue-500/30 transition-colors"
           >
-            <!-- 视频缩略图占位 -->
-            <div class="relative aspect-video bg-slate-800 flex items-center justify-center">
-              <video
-                :src="cs.videoPath"
-                class="w-full h-full object-cover opacity-60"
-                muted
-                preload="metadata"
-              ></video>
-              <div class="absolute inset-0 flex items-center justify-center">
-                <div class="w-10 h-10 rounded-full bg-slate-950/70 border border-slate-600 flex items-center justify-center">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" class="text-slate-300 ml-0.5">
-                    <polygon points="5,3 19,12 5,21"/>
-                  </svg>
-                </div>
-              </div>
-            </div>
-
-            <!-- 案例信息 -->
+            <!-- 案例信息（优先展示） -->
             <div class="p-3 flex-1 flex flex-col">
               <div class="flex items-center gap-2 mb-2">
                 <span class="text-xs px-2 py-0.5 rounded-full bg-slate-700 text-slate-400 border border-slate-600">
@@ -528,6 +519,26 @@ const bestEpochData = computed(() => {
               >
                 查看案例分析
               </button>
+            </div>
+
+            <!-- 封面图（辅助展示） -->
+            <div class="mt-3 rounded-md overflow-hidden relative" style="height: 120px;">
+              <img
+                v-if="cs.coverImage"
+                :src="cs.coverImage"
+                :alt="cs.title + ' 封面'"
+                class="w-full h-full object-cover"
+              />
+              <div v-else class="w-full h-full bg-slate-800/80 border border-slate-700/40 flex items-center justify-center">
+                <span class="text-xs text-slate-600">{{ cs.sceneTag }}</span>
+              </div>
+              <div class="absolute inset-0 flex items-center justify-center pointer-events-none">
+                <div class="w-8 h-8 rounded-full bg-slate-950/70 border border-slate-600 flex items-center justify-center">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" class="text-slate-300 ml-0.5">
+                    <polygon points="5,3 19,12 5,21"/>
+                  </svg>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -563,8 +574,8 @@ const bestEpochData = computed(() => {
           </div>
         </div>
 
-        <!-- 精度演进趋势（小图） -->
-        <div class="rounded-lg border border-slate-800 p-4">
+        <!-- 精度演进趋势（小图，有数据时显示） -->
+        <div v-if="hasTrainingHistory" class="rounded-lg border border-slate-800 p-4">
           <div class="flex items-center gap-2 mb-3">
             <span class="flex items-center gap-1.5 text-xs text-slate-500">
               <span class="w-3 h-0.5 bg-blue-400 rounded"></span> Precision
@@ -616,6 +627,9 @@ const bestEpochData = computed(() => {
               </text>
             </g>
           </svg>
+        </div>
+        <div v-else class="rounded-lg border border-slate-800 p-6 flex items-center justify-center text-xs text-slate-600">
+          训练历史数据暂未接入
         </div>
       </div>
 
