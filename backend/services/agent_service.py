@@ -49,7 +49,29 @@ _CLOSED_SET_COVERAGE_GROUPS: dict[str, list[frozenset]] = {
         frozenset({"pedestrian", "people", "bicycle", "car", "van", "truck",
                     "tricycle", "awning-tricycle", "bus", "motor"}),
     ],
+    # Person-only specialized models — covered by person detection only
+    "YOLOv8-Person": [
+        frozenset({"person"}),
+    ],
+    "YOLOv8-Thermal-Person": [
+        frozenset({"person"}),
+    ],
 }
+
+# Person-only model IDs (registered in registry.py MODEL_REGISTRY)
+_PERSON_ONLY_MODELS = {"YOLOv8-Person", "YOLOv8-Thermal-Person"}
+
+# Keywords that indicate low-light / thermal-infrared scenarios.
+# Matched case-insensitively against the raw user_text.
+_LOW_LIGHT_KEYWORDS = frozenset({
+    "夜间", "弱光", "低照度", "黑暗", "红外", "热红外",
+    "热成像", "夜视", "夜搜救", "夜间搜救",
+})
+
+# Keywords that indicate the task is person-only (not multi-class).
+_PERSON_ONLY_KEYWORDS = frozenset({
+    "人", "人员", "行人", "人体", "找人", "搜救找人",
+})
 
 
 def _load_config() -> None:
@@ -134,6 +156,70 @@ def _apply_closed_set_priority(
     return final_model_id, final_target_classes, final_reason
 
 
+def _contains_low_light_keywords(user_text: str) -> bool:
+    """Return True if user_text contains any low-light / thermal-infrared keyword."""
+    return any(kw in user_text for kw in _LOW_LIGHT_KEYWORDS)
+
+
+def _is_person_only_task(user_text: str, target_classes: list[str]) -> bool:
+    """
+    Return True if the task is clearly person-only:
+      - target_classes is a single-element list containing only "person"
+      - AND user_text contains at least one person-only keyword
+    """
+    if not target_classes:
+        return False
+    class_set = {c.lower().strip() for c in target_classes}
+    return (class_set == {"person"} and any(kw in user_text for kw in _PERSON_ONLY_KEYWORDS))
+
+
+def _apply_person_only_fallback(
+    model_id: str,
+    target_classes: list[str],
+    user_text: str,
+    raw_reason: str,
+) -> tuple[str, list[str], str]:
+    """
+    Person-only fallback: if the parsed result is person-only, override the model
+    to the appropriate specialized person detector.
+
+    Logic:
+      - If target_classes is exactly ["person"]:
+          • Hit low-light keyword  → force YOLOv8-Thermal-Person
+          • No low-light keyword   → force YOLOv8-Person
+      - Otherwise (multi-class task): leave model unchanged.
+
+    This runs AFTER _apply_closed_set_priority, so it overrides even the closed-set
+    model that the LLM or priority logic may have chosen.
+    """
+    if not _is_person_only_task(user_text, target_classes):
+        # Not a person-only task — keep whatever was already decided
+        return model_id, target_classes, raw_reason
+
+    # Person-only task: select thermal or normal based on low-light keywords
+    if _contains_low_light_keywords(user_text):
+        final_model_id = "YOLOv8-Thermal-Person"
+    else:
+        final_model_id = "YOLOv8-Person"
+
+    final_target_classes = ["person"]
+
+    # Preserve raw_reason if it already mentions thermal / low-light, otherwise explain
+    if _contains_low_light_keywords(raw_reason):
+        final_reason = raw_reason
+    elif _contains_low_light_keywords(user_text):
+        final_reason = (
+            "检测任务为人员/人体识别且包含弱光/夜间/热成像语义，"
+            "强制使用专用热红外人体模型 YOLOv8-Thermal-Person 以提升检测精度。"
+        )
+    else:
+        final_reason = (
+            "检测任务为人员/人体识别，强制使用专用人体模型 YOLOv8-Person 以获得更精确的检测效果。"
+        )
+
+    return final_model_id, final_target_classes, final_reason
+
+
 # ── Internal helpers ──────────────────────────────────────────────────────────
 
 def _build_models_context() -> str:
@@ -181,7 +267,14 @@ JSON 必须包含以下字段：
 - 如果用户提到 COCO 常见目标（人、猫、狗、杯子等），推荐 YOLOv8-Base
 - 如果用户使用中文抽象描述或明确说"任意目标"，优先用开放词汇模型 YOLO-World-V2
 - 如果模型不支持用户提到的类别，修正为该模型支持的最接近类别
-- 如果完全不明确，返回 {"intent": "other", "recommended_model_id": "YOLO-World-V2", "target_classes": ["object"], "report_required": false, "reason": "任务描述不明确，默认使用开放词汇模型", "confidence": "low"}"""
+- 如果完全不明确，返回 {"intent": "other", "recommended_model_id": "YOLO-World-V2", "target_classes": ["object"], "report_required": false, "reason": "任务描述不明确，默认使用开放词汇模型", "confidence": "low"}
+
+## 人员检测专用模型优先规则
+- 当用户目标仅为"人 / 人员 / 行人 / 人体 / 找人 / 搜救找人"等单一人物检测时，优先推荐专用人体模型，而非通用开放词汇模型或 YOLOv8-Base：
+    • 正常光照 / 可见光场景：YOLOv8-Person（target_classes=["person"]）
+    • 弱光 / 夜间 / 热成像 / 红外 / 夜视等场景：YOLOv8-Thermal-Person（target_classes=["person"]）
+- 上述人员专用模型仅适用于纯 person 检测任务；混合多类别任务（车辆+行人、无人机+人员等）保持现有推荐逻辑不变
+- 推荐的人员模型 ID 必须在上述可用模型列表中，禁止返回未注册模型 ID"""
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -287,6 +380,13 @@ def parse_detection_task(user_text: str) -> dict:
     # Step 3: Apply closed-set priority — may override recommended_model_id
     final_model_id, final_classes, final_reason = _apply_closed_set_priority(
         recommended_model_id, target_classes, raw_reason
+    )
+
+    # Step 4: Person-only fallback — override to specialized person model if needed
+    # This must run AFTER step 3 so that it can correct even the closed-set model
+    # that was auto-selected by _apply_closed_set_priority.
+    final_model_id, final_classes, final_reason = _apply_person_only_fallback(
+        final_model_id, final_classes, user_text, final_reason
     )
 
     return {

@@ -169,6 +169,27 @@ MODEL_REGISTRY: dict[str, ModelCapabilities] = {
         class_filter_enabled=True,
         description="VisDrone 数据集 Fine-tuned 模型，支持 pedestrian, people, bicycle, car, van, truck, tricycle, awning-tricycle, bus, motor 十类。",
     ),
+    # ── Person-only specialized models ────────────────────────────────────────
+    "YOLOv8-Person": ModelCapabilities(
+        model_id="YOLOv8-Person",
+        display_name="YOLOv8 Person (可见光专用)",
+        model_type="closed_set",
+        supports_prompt=False,
+        prompt_editable=False,
+        supported_classes=["person"],
+        class_filter_enabled=True,
+        description="可见光场景人体检测专用模型（ONNX），Fine-tuned on person 类。适合正常光照条件下的行人、人员、人体检测。",
+    ),
+    "YOLOv8-Thermal-Person": ModelCapabilities(
+        model_id="YOLOv8-Thermal-Person",
+        display_name="YOLOv8 Thermal Person (热红外专用)",
+        model_type="closed_set",
+        supports_prompt=False,
+        prompt_editable=False,
+        supported_classes=["person"],
+        class_filter_enabled=True,
+        description="热红外/弱光场景人体检测专用模型（ONNX），针对夜间、弱光、低照度、热成像、红外等环境下的人体识别 Fine-tuned。",
+    ),
 }
 
 
@@ -206,6 +227,21 @@ RUNTIME_CONFIG: dict[str, ModelConfig] = {
     "YOLOv8-VisDrone": ModelConfig(
         runtime_type="onnx",
         weight_path=_WEIGHTS_DIR / "VisDrone" / "yolov8x_visdrone_best.onnx",
+        confidence_threshold=0.25,
+        warmup_enabled=True,
+        device="cuda:0",
+    ),
+    # ── Person-only specialized ONNX models ──────────────────────────────────
+    "YOLOv8-Person": ModelConfig(
+        runtime_type="onnx",
+        weight_path=_WEIGHTS_DIR / "person_only" / "best_person.onnx",
+        confidence_threshold=0.25,
+        warmup_enabled=True,
+        device="cuda:0",
+    ),
+    "YOLOv8-Thermal-Person": ModelConfig(
+        runtime_type="onnx",
+        weight_path=_WEIGHTS_DIR / "person_only" / "best_thermal_person.onnx",
         confidence_threshold=0.25,
         warmup_enabled=True,
         device="cuda:0",
