@@ -73,6 +73,33 @@ _PERSON_ONLY_KEYWORDS = frozenset({
     "人", "人员", "行人", "人体", "找人", "搜救找人",
 })
 
+# Keywords that indicate attribute / descriptive constraints on the target.
+# When the task combines a target class with any of these descriptors,
+# the closed-set priority should NOT apply — open vocabulary is preferred.
+_ATTRIBUTE_CONSTRAINT_KEYWORDS = frozenset({
+    # Colors — prefer 2-char forms to avoid accidental matches on single chars
+    "白", "黑", "红", "蓝", "绿", "黄", "灰", "银", "金色", "橙色",
+    "紫色", "棕色", "深色", "浅色", "彩色",
+    # Appearance / shape
+    "大", "小", "长", "短", "圆", "方", "扁", "宽", "窄", "高", "矮", "胖", "瘦",
+    # Clothing / accessories
+    "帽子", "头盔", "背包", "反光衣", "雨伞", "围巾", "手套", "外套",
+    "制服", "工装", "西装", "T恤", "裙子", "短裤", "长裤", "鞋子", "靴子",
+    "口罩", "眼镜", "墨镜",
+    # State / behaviour
+    "奔跑", "跑步", "骑行", "站立", "行走", "坐着", "躺卧", "聚集",
+    "停放", "移动", "静止", "逃跑", "摔倒", "挥手",
+    # Vehicle attributes
+    "SUV", "轿车", "卡车", "面包车", "公交车", "大巴", "出租车",
+    # Age/people descriptors — multi-char only to avoid "人" collateral matches
+    "老人", "儿童", "小孩", "年轻人", "成年人",
+})
+
+
+def _contains_attribute_constraints(user_text: str) -> bool:
+    """Return True if user_text contains any attribute/descriptive constraint keyword."""
+    return any(kw in user_text for kw in _ATTRIBUTE_CONSTRAINT_KEYWORDS)
+
 
 def _load_config() -> None:
     """Read environment variables lazily (call once at first use)."""
@@ -124,13 +151,24 @@ def _apply_closed_set_priority(
     model_id: str,
     target_classes: list[str],
     raw_reason: str,
+    user_text: str,
 ) -> tuple[str, list[str], str]:
     """
     Apply closed-set priority: if all target classes are covered by a closed-set
     model, switch to that model and update the reason accordingly.
 
+    IMPORTANT — boundary guard: closed-set priority must NOT apply when the
+    task contains attribute constraints or unsupported-modality keywords, even
+    if all classes happen to be in a closed-set group's class list.  The task
+    has already been re-routed by Step 3/4, and Step 5 must not undo it.
+
     Returns (final_model_id, final_target_classes, final_reason).
     """
+    if _contains_attribute_constraints(user_text):
+        return model_id, target_classes, raw_reason
+    if _contains_low_light_keywords(user_text):
+        return model_id, target_classes, raw_reason
+
     closed_caps = _find_best_closed_set_model(target_classes)
 
     if closed_caps is None:
@@ -178,46 +216,128 @@ def _apply_person_only_fallback(
     target_classes: list[str],
     user_text: str,
     raw_reason: str,
-) -> tuple[str, list[str], str]:
+    confidence: str,
+) -> tuple[str, list[str], str, str]:
     """
     Person-only fallback: if the parsed result is person-only, override the model
     to the appropriate specialized person detector.
 
-    Logic:
-      - If target_classes is exactly ["person"]:
-          • Hit low-light keyword  → force YOLOv8-Thermal-Person
-          • No low-light keyword   → force YOLOv8-Person
-      - Otherwise (multi-class task): leave model unchanged.
+    IMPORTANT — boundary guards:
+      1. Attribute-constrained tasks (e.g. "穿红衣服的人", "找戴帽子的人")
+         must NOT be overridden — the Step 4 open-vocab decision stands.
+      2. Unsupported-modality tasks (thermal/IR) must NOT be overridden —
+         the Step 3 capability-boundary disclaimer (confidence=low) stands.
+         We intentionally do NOT force-switch to YOLOv8-Thermal-Person here,
+         because doing so would silently lift the "low confidence" signal that
+         Step 3 carefully planted.
 
-    This runs AFTER _apply_closed_set_priority, so it overrides even the closed-set
-    model that the LLM or priority logic may have chosen.
+    Returns (final_model_id, final_target_classes, final_reason, final_confidence).
     """
     if not _is_person_only_task(user_text, target_classes):
-        # Not a person-only task — keep whatever was already decided
-        return model_id, target_classes, raw_reason
+        return model_id, target_classes, raw_reason, confidence
 
-    # Person-only task: select thermal or normal based on low-light keywords
+    # Guard 1: attribute-constrained → keep Step 4 decision
+    if _contains_attribute_constraints(user_text):
+        return model_id, target_classes, raw_reason, confidence
+
+    # Guard 2: unsupported-modality → keep Step 3 decision (do NOT upgrade confidence)
     if _contains_low_light_keywords(user_text):
-        final_model_id = "YOLOv8-Thermal-Person"
-    else:
-        final_model_id = "YOLOv8-Person"
+        return model_id, target_classes, raw_reason, confidence
 
+    # Pure person-only: switch to specialized model and lift confidence
+    final_model_id = "YOLOv8-Person"
     final_target_classes = ["person"]
+    final_reason = (
+        "检测任务为人员/人体识别，强制使用专用人体模型 YOLOv8-Person 以获得更精确的检测效果。"
+    )
+    final_confidence = "high"
 
-    # Preserve raw_reason if it already mentions thermal / low-light, otherwise explain
-    if _contains_low_light_keywords(raw_reason):
-        final_reason = raw_reason
-    elif _contains_low_light_keywords(user_text):
+    return final_model_id, final_target_classes, final_reason, final_confidence
+
+
+def _apply_attribute_constraint_correction(
+    model_id: str,
+    target_classes: list[str],
+    user_text: str,
+    raw_reason: str,
+    confidence: str,
+) -> tuple[str, list[str], str, str]:
+    """
+    Detect attribute-constrained tasks (e.g. "找白车", "穿红衣服的人")
+    and redirect them to open-vocabulary models.
+
+    Rule: if the task contains BOTH a target class AND any attribute
+    descriptor, closed-set priority should NOT force the result into
+    a specialized model — open vocabulary is more appropriate.
+
+    Boundary guard: if the task also contains unsupported-modality keywords
+    (thermal/IR), Step 3 has already set confidence=low and injected the
+    boundary disclaimer.  We must NOT override Step 3's decision by
+    switching the model away — keep the model as-is and only lift confidence
+    back to "medium" if it makes sense for the attribute constraint.
+
+    Returns (final_model_id, final_target_classes, final_reason, final_confidence).
+    """
+    if not _contains_attribute_constraints(user_text):
+        return model_id, target_classes, raw_reason, confidence
+
+    # If the task contains unsupported-modality keywords, Step 3 already
+    # set confidence=low and wrote a boundary disclaimer — do NOT override it.
+    if _contains_low_light_keywords(user_text):
+        return model_id, target_classes, raw_reason, confidence
+
+    # Task has attribute constraints — only override if currently on a closed-set model
+    caps = MODEL_REGISTRY.get(model_id)
+    if caps and caps.model_type == "closed_set":
+        final_model_id = "YOLO-World-V2"
+        final_classes = list(target_classes)
         final_reason = (
-            "检测任务为人员/人体识别且包含弱光/夜间/热成像语义，"
-            "强制使用专用热红外人体模型 YOLOv8-Thermal-Person 以提升检测精度。"
+            f"检测任务包含外观/属性描述（{user_text.strip()}），"
+            f"闭集专用模型无法表达此类属性约束，"
+            f"切换为开放词汇模型 YOLO-World-V2 以支持自然语言类别表达。"
         )
+        final_confidence = "medium"
+        return final_model_id, final_classes, final_reason, final_confidence
+
+    # Already on open vocab — keep it
+    return model_id, target_classes, raw_reason, confidence
+
+
+def _apply_unsupported_modality_correction(
+    model_id: str,
+    target_classes: list[str],
+    user_text: str,
+    raw_reason: str,
+    confidence: str,
+) -> tuple[str, list[str], str, str]:
+    """
+    Detect unsupported modality / perception-condition keywords
+    (infrared, thermal, night-vision) and downgrade confidence + inject
+    a capability-boundary note.
+
+    The system currently only supports visible-light video input.
+    Thermal / IR tasks should NOT receive high-confidence normal recommendations.
+
+    Returns (final_model_id, final_target_classes, final_reason, final_confidence).
+    """
+    if not _contains_low_light_keywords(user_text):
+        return model_id, target_classes, raw_reason, confidence
+
+    # Downgrade confidence — do NOT silently pretend the system handles thermal
+    if confidence == "high":
+        final_confidence = "low"
+    elif confidence == "medium":
+        final_confidence = "low"
     else:
-        final_reason = (
-            "检测任务为人员/人体识别，强制使用专用人体模型 YOLOv8-Person 以获得更精确的检测效果。"
-        )
+        final_confidence = "low"
 
-    return final_model_id, final_target_classes, final_reason
+    final_reason = (
+        f"检测任务涉及红外/热成像/夜视场景（{user_text.strip()}），"
+        f"当前系统主要基于可见光视频输入，不原生支持红外/热成像数据链路。 "
+        f"此次推荐仅作近似可见光尝试，效果可能受限，建议在可见光画面下使用或确认红外数据源已接入。"
+    )
+
+    return model_id, target_classes, final_reason, final_confidence
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
@@ -377,16 +497,29 @@ def parse_detection_task(user_text: str) -> dict:
     # Step 2: Capture the raw reason BEFORE any model/priority changes
     raw_reason: str = str(result.get("reason", ""))[:200]
 
-    # Step 3: Apply closed-set priority — may override recommended_model_id
-    final_model_id, final_classes, final_reason = _apply_closed_set_priority(
-        recommended_model_id, target_classes, raw_reason
+    # Step 3: Unsupported modality correction — highest priority, runs FIRST
+    # to establish the capability boundary before any model switching
+    final_model_id, final_classes, final_reason, final_confidence = _apply_unsupported_modality_correction(
+        recommended_model_id, target_classes, user_text, raw_reason, confidence
     )
 
-    # Step 4: Person-only fallback — override to specialized person model if needed
-    # This must run AFTER step 3 so that it can correct even the closed-set model
-    # that was auto-selected by _apply_closed_set_priority.
-    final_model_id, final_classes, final_reason = _apply_person_only_fallback(
-        final_model_id, final_classes, user_text, final_reason
+    # Step 4: Attribute-constraint correction — redirect closed-set models to
+    # open vocabulary when the task contains descriptive/attribute keywords
+    final_model_id, final_classes, final_reason, final_confidence = _apply_attribute_constraint_correction(
+        final_model_id, final_classes, user_text, final_reason, final_confidence
+    )
+
+    # Step 5: Person-only fallback — override to specialized person model if needed;
+    # only triggers when the task is genuinely pure person + no attribute/modality qualifiers
+    final_model_id, final_classes, final_reason, final_confidence = _apply_person_only_fallback(
+        final_model_id, final_classes, user_text, final_reason, final_confidence
+    )
+
+    # Step 6: Closed-set priority — only applies to pure-category tasks;
+    # guarded by _contains_attribute_constraints and _contains_low_light_keywords internally,
+    # so it will NOT override decisions already made by Steps 3–5
+    final_model_id, final_classes, final_reason = _apply_closed_set_priority(
+        final_model_id, final_classes, final_reason, user_text
     )
 
     return {
@@ -395,7 +528,7 @@ def parse_detection_task(user_text: str) -> dict:
         "target_classes": final_classes,
         "report_required": bool(result.get("report_required", False)),
         "reason": final_reason,
-        "confidence": confidence,
+        "confidence": final_confidence,
     }
 
 
