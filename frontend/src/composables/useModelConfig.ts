@@ -39,14 +39,14 @@ export const QUICK_CHIPS = [
   { label: '背包',   en: 'backpack' },
 ] as const
 
-export function useModelConfig(defaultModelId: string = 'YOLO-World-V2') {
+export function useModelConfig(defaultModelId: string | null = null) {
   // ── State ────────────────────────────────────────────────────────────────────
 
   /** List of available models fetched from backend */
   const modelList = ref<ModelListItem[]>([])
   
-  /** Currently selected model ID */
-  const selectedModelId = ref<string>(defaultModelId)
+  /** Currently selected model ID (null = not selected) */
+  const selectedModelId = ref<string | null>(defaultModelId)
   
   /** Capabilities for the currently selected model */
   const currentCapabilities = ref<ModelCapabilities | null>(null)
@@ -148,6 +148,10 @@ export function useModelConfig(defaultModelId: string = 'YOLO-World-V2') {
 
   /** Fetch capabilities for a specific model */
   async function fetchCapabilities(modelId: string): Promise<ModelCapabilities | null> {
+    if (!modelId) {
+      currentCapabilities.value = null
+      return null
+    }
     isLoading.value = true
     fetchError.value = null
     try {
@@ -260,10 +264,12 @@ export function useModelConfig(defaultModelId: string = 'YOLO-World-V2') {
 
   // ── Initialization ───────────────────────────────────────────────────────────
 
-  /** Initialize by fetching model list and capabilities for default model */
+  /** Initialize by fetching model list and capabilities for default model (if any) */
   async function initialize() {
     await fetchModelList()
-    await fetchCapabilities(selectedModelId.value)
+    if (selectedModelId.value) {
+      await fetchCapabilities(selectedModelId.value)
+    }
   }
 
   // Watch for model ID changes to refetch capabilities

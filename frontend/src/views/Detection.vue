@@ -116,14 +116,14 @@ function showModelLoadingHint() {
   // If still loading after 1 s, show a more informative message
   _modelHintTimer = setTimeout(() => {
     if (modelLoadingHint.value !== null) {
-      modelLoadingHint.value = '模型预热中，首次加载可能需要几秒'
+      modelLoadingHint.value = '模型加载中，首次加载可能需要几秒'
     }
   }, 1000)
 }
 
 function showModelReadyHint() {
   clearModelHintTimer()
-  modelLoadingHint.value = '模型已就绪'
+  modelLoadingHint.value = '模型已加载'
   setTimeout(() => { modelLoadingHint.value = null }, 900)
 }
 
@@ -193,6 +193,14 @@ const classCounts     = ref<Record<string, number>>({})
 const totalDetections = computed(() =>
   Object.values(classCounts.value).reduce((a, b) => a + b, 0),
 )
+
+// Top N class counts for overlay display (sorted by count desc, limited to 3)
+const topClassCounts = computed<Array<{ className: string; count: number }>>(() => {
+  return Object.entries(classCounts.value)
+    .map(([className, count]) => ({ className, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 3)
+})
 
 // Max detections in a single frame (peak)
 const maxFrameDetections = ref(0)
@@ -279,6 +287,28 @@ const {
   initialize: initModelConfig,
 } = useModelConfig()
 
+// ── Model selection state ────────────────────────────────────────────────────
+// Whether a model has been explicitly selected (null = not selected)
+const hasSelectedModel = computed(() => selectedModelId.value !== null)
+
+// Current model display name for the select dropdown
+const currentModelDisplayName = computed(() => {
+  if (!selectedModelId.value) return ''
+  const item = modelList.value.find(m => m.model_id === selectedModelId.value)
+  return item?.display_name ?? ''
+})
+
+// Handle model select change — avoid triggering when placeholder is selected
+function onModelSelectChange(e: Event) {
+  const value = (e.target as HTMLSelectElement).value
+  if (value) {
+    selectModel(value)
+  } else {
+    // User selected the placeholder — reset to null
+    selectedModelId.value = null
+  }
+}
+
 // ── AI console state ───────────────────────────────────────────────────────────
 
 const QUICK_CHIPS_LOCAL = [
@@ -331,6 +361,12 @@ const { status: wsStatus, connect, disconnect, send, waitForConnected, forceReco
       // ── 调试指标：前端消息处理耗时 ─────────────────────────────────────
       frontendRenderMs.value = performance.now() - resultNow
 
+      // ── 进入 analyzing 后清理模型加载提示 ───────────────────────────────
+      if (analysisState.value === 'loading_model') {
+        clearModelHintTimer()
+        modelLoadingHint.value = null
+      }
+
     } else if (msg.message_type === 'error') {
       showToast(msg.detail, 'error')
     } else if (msg.message_type === 'status') {
@@ -353,6 +389,14 @@ const { status: wsStatus, connect, disconnect, send, waitForConnected, forceReco
 // Sync to global store → MainLayout header indicators
 watch(wsStatus,    v => { globalWsStatus.value = v }, { immediate: true })
 watch(isAnalyzing, v => { isGpuActive.value    = v }, { immediate: true })
+
+// 进入 analyzing 时无条件清理模型加载提示（兜底所有路径）
+watch(() => analysisState.value, (state) => {
+  if (state === 'analyzing') {
+    clearModelHintTimer()
+    modelLoadingHint.value = null
+  }
+})
 
 // ── Visibility-aware analysis recovery ────────────────────────────────────────
 // Records whether analysis was running when the page went to the background.
@@ -449,9 +493,16 @@ const { startRendering } = useCanvasRenderer({
 // ── State machine actions ──────────────────────────────────────────────────────
 
 function startAnalysis() {
-  if (!hasVideo.value) return
+  if (!hasVideo.value) {
+    showToast('请先加载视频文件', 'warn')
+    return
+  }
   if (wsStatus.value !== 'connected') {
     showToast('WebSocket 未连接，请等待重连后重试', 'warn')
+    return
+  }
+  if (!hasSelectedModel.value) {
+    showToast('请先选择推理模型', 'warn')
     return
   }
   
@@ -517,6 +568,8 @@ function resumeAnalysis() {
   }
   videoEl.value?.play()
   startPush()
+  clearModelHintTimer()
+  modelLoadingHint.value = null
   analysisState.value = 'analyzing'
 }
 
@@ -656,7 +709,7 @@ const latencyOk = computed(() => endToEndLatencyMs.value !== null && endToEndLat
 const stateInfo = computed(() => ({
   standby:      { label: 'STANDBY',    color: 'text-slate-500',   bg: 'bg-slate-500/10   border-slate-600/40' },
   ready:        { label: 'ARMED',      color: 'text-emerald-400', bg: 'bg-emerald-500/10 border-emerald-500/40' },
-  loading_model:{ label: 'WARMING UP', color: 'text-amber-400',   bg: 'bg-amber-500/10   border-amber-500/40' },
+  loading_model:{ label: 'LOADING', color: 'text-amber-400',   bg: 'bg-amber-500/10   border-amber-500/40' },
   analyzing:    { label: 'ANALYZING',  color: 'text-blue-400',    bg: 'bg-blue-500/10    border-blue-500/40' },
   paused:       { label: 'PAUSED',    color: 'text-amber-400',   bg: 'bg-amber-500/10   border-amber-500/40' },
   finished:     { label: 'COMPLETE',  color: 'text-cyan-400',    bg: 'bg-cyan-500/10   border-cyan-500/40' },
@@ -1013,20 +1066,8 @@ async function handleApplyRecommendation(rec: AgentRecommendation) {
           </div>
         </Transition>
 
-        <!-- Detection count badge (top-right, analyzing only) -->
-        <Transition name="fade">
-          <div
-            v-if="isAnalyzing && currentDetections.length > 0"
-            class="absolute top-4 right-4 px-3 py-1.5 rounded-lg
-                   bg-slate-950/85 border border-blue-500/40 backdrop-blur
-                   text-blue-400 text-xs font-mono font-medium tracking-wider"
-          >
-            {{ currentDetections.length }} TARGET{{ currentDetections.length !== 1 ? 'S' : '' }}
-          </div>
-        </Transition>
-
-        <!-- State pill (top-left) -->
-        <div class="absolute top-4 left-4">
+        <!-- State pill (top-right) -->
+        <div class="absolute top-4 right-4">
           <span
             class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border
                    text-xs font-mono font-medium tracking-widest"
@@ -1151,19 +1192,32 @@ async function handleApplyRecommendation(rec: AgentRecommendation) {
           </div>
         </div>
 
+        <!-- No model selected hint -->
+        <div v-else-if="!hasSelectedModel && !modelLoading" class="mb-4 p-3 rounded-lg border bg-slate-800/50 border-slate-700/60">
+          <div class="flex items-center gap-2 text-slate-400 text-xs">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"/>
+              <line x1="12" y1="8" x2="12" y2="12"/>
+              <line x1="12" y1="16" x2="12.01" y2="16"/>
+            </svg>
+            <span>请从上方下拉菜单选择推理模型</span>
+          </div>
+        </div>
+
         <!-- Model selector -->
         <div>
           <label class="block text-xs font-medium text-slate-400 tracking-wider uppercase mb-2">推理模型</label>
           <div class="relative">
             <select
-              :value="selectedModelId"
+              v-model="selectedModelId"
               :disabled="isLocked"
               class="w-full appearance-none bg-slate-800 border border-slate-700 rounded-lg
                      px-3 py-2.5 text-sm text-slate-200 cursor-pointer outline-none
                      focus:border-blue-500 focus:ring-1 focus:ring-blue-500/30
                      disabled:opacity-40 disabled:cursor-not-allowed transition-all"
-              @change="(e) => selectModel((e.target as HTMLSelectElement).value)"
+              @change="onModelSelectChange"
             >
+              <option value="" disabled>请选择推理模型</option>
               <option v-for="m in modelList" :key="m.model_id" :value="m.model_id" class="bg-slate-900">
                 {{ m.display_name }}
               </option>
@@ -1179,7 +1233,7 @@ async function handleApplyRecommendation(rec: AgentRecommendation) {
         <!-- Phase 3.1: Dynamic Configuration Based on Model Type -->
         
         <!-- Open Vocabulary Model: Prompt Input -->
-        <div v-if="isOpenVocabModel">
+        <div v-if="hasSelectedModel && isOpenVocabModel">
           <!-- Quick chips for open-vocab -->
           <div class="mb-3">
             <label class="block text-xs font-medium text-slate-400 tracking-wider uppercase mb-2">快捷类别</label>
@@ -1227,7 +1281,7 @@ async function handleApplyRecommendation(rec: AgentRecommendation) {
         </div>
 
         <!-- Closed Set Model: Class Filter -->
-        <div v-else-if="isClosedSetModel">
+        <div v-else-if="hasSelectedModel && isClosedSetModel">
           <div class="mb-3 p-3 rounded-lg bg-amber-500/5 border border-amber-500/20">
             <div class="flex items-center gap-2 text-amber-400 text-xs">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -1320,13 +1374,13 @@ async function handleApplyRecommendation(rec: AgentRecommendation) {
             v-if="!isAnalyzing && !isPaused"
             class="w-full py-3 rounded-xl text-sm font-semibold tracking-wide
                    flex items-center justify-center gap-2.5 transition-all duration-200"
-            :class="canExecute
+            :class="canExecute && hasSelectedModel
               ? 'bg-gradient-to-r from-blue-600 to-blue-500 text-white shadow-lg shadow-blue-500/25 hover:from-blue-500 hover:to-blue-400 active:scale-[0.98]'
               : 'bg-slate-800 border border-slate-700 text-slate-500 cursor-not-allowed'"
-            :disabled="!canExecute"
+            :disabled="!canExecute || !hasSelectedModel"
             @click="startAnalysis"
           >
-            {{ analysisState === 'finished' ? '重新启动分析' : '启动实时分析' }}
+            {{ analysisState === 'finished' ? '重新启动分析' : hasSelectedModel ? '启动实时分析' : '请先选择模型' }}
           </button>
 
           <!-- Pause & Resume buttons -->
