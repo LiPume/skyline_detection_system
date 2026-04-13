@@ -340,6 +340,141 @@ def _apply_unsupported_modality_correction(
     return model_id, target_classes, final_reason, final_confidence
 
 
+# ── Attribute-phrase restoration for open_vocab models ──────────────────────
+# Chinese → English attribute/colour/size word mappings
+_ATTRIBUTE_WORD_MAP: dict[str, str] = {
+    "白": "white",
+    "黑": "black",
+    "红": "red",
+    "蓝": "blue",
+    "绿": "green",
+    "黄": "yellow",
+    "灰": "gray",
+    "银": "silver",
+    "金色": "golden",
+    "橙": "orange",
+    "紫": "purple",
+    "棕": "brown",
+    "深色": "dark",
+    "浅色": "light",
+    "彩色": "colorful",
+    "小": "small",
+    "大": "large",
+    "微": "tiny",
+    "很": "",      # 单独"很"不构成属性，继续匹配下一个词
+    "受": "",      # 单独"受"不构成属性，继续匹配下一个词
+    "停放": "parked",
+    "移动": "moving",
+    "聚集": "crowd",
+    "倒地": "fallen",
+    "受损": "damaged",
+}
+
+# Chinese base noun → English base noun mappings (lowercase)
+_BASE_NOUN_MAP: dict[str, str] = {
+    "汽车": "car",
+    "车辆": "car",
+    "车": "car",
+    "轿车": "car",
+    "小车": "car",
+    "卡车": "truck",
+    "货车": "truck",
+    "大巴": "bus",
+    "公交车": "bus",
+    "巴士": "bus",
+    "人员": "person",
+    "行人": "person",
+    "人体": "person",
+    "兔子": "rabbit",
+    "兔": "rabbit",
+    "猫": "cat",
+    "狗": "dog",
+    "鸟": "bird",
+    "马": "horse",
+    "羊": "sheep",
+    "牛": "cow",
+    "猪": "pig",
+}
+
+# Single-word attribute tokens that, if present, indicate an attribute constraint
+_SINGLE_ATTR_TOKENS = frozenset({
+    "白色", "黑色", "红色", "蓝色", "绿色", "黄色", "灰色", "银色",
+    "金色", "橙色", "紫色", "棕色", "深色", "浅色", "彩色",
+    "小型", "大型", "微小", "很小",
+    "停放", "移动", "聚集", "倒地", "受损",
+    "奔跑", "骑行", "站立", "躺卧", "摔倒",
+})
+
+
+def _extract_chinese_attributes(text: str) -> list[str]:
+    """Extract attribute/colour/size words from Chinese user text."""
+    attrs: list[str] = []
+    for attr, eng in _ATTRIBUTE_WORD_MAP.items():
+        if attr in text and eng:   # skip empty-string placeholders
+            attrs.append(eng)
+    return attrs
+
+
+def _extract_chinese_noun(text: str) -> str | None:
+    """Extract the most likely Chinese base noun from user text."""
+    for cn, en in _BASE_NOUN_MAP.items():
+        if cn in text:
+            return en
+    return None
+
+
+def _looks_like_bare_noun(phrase: str) -> bool:
+    """Return True if phrase looks like a bare English noun (car, person, rabbit)."""
+    bare_nouns = {"car", "truck", "bus", "person", "rabbit", "cat", "dog", "bird",
+                  "horse", "sheep", "cow", "pig", "motorcycle", "bicycle"}
+    return phrase.lower().strip() in bare_nouns
+
+
+def _restore_attribute_phrases(
+    model_id: str,
+    target_classes: list[str],
+    user_text: str,
+) -> list[str]:
+    """
+    Minimal post-processing fallback for open_vocab models.
+
+    Activates only when:
+      1. model_id belongs to an open_vocab model
+      2. target_classes contains exactly ONE bare noun (car / person / rabbit …)
+      3. user_text contains explicit attribute tokens (colour, size, state …)
+
+    In that case, attempts to reconstruct a richer English detection phrase
+    by combining extracted attributes with the base noun.
+
+    Returns the original target_classes unchanged if any of the preconditions
+    are not met, or if LLM already returned a richer phrase.
+    """
+    caps = MODEL_REGISTRY.get(model_id)
+    if not caps or caps.model_type != "open_vocab":
+        return target_classes
+
+    if len(target_classes) != 1 or not _looks_like_bare_noun(target_classes[0]):
+        return target_classes
+
+    attrs = _extract_chinese_attributes(user_text)
+    if not attrs:
+        return target_classes
+
+    base_noun = _extract_chinese_noun(user_text)
+    if base_noun is None:
+        return target_classes
+
+    restored = " ".join(attrs + [base_noun]).strip()
+    if restored and restored.lower() != target_classes[0].lower():
+        logger.info(
+            "[agent_service] Restored attribute phrase: %s -> %s (user_text=%r)",
+            target_classes[0], restored, user_text,
+        )
+        return [restored]
+
+    return target_classes
+
+
 # ── Internal helpers ──────────────────────────────────────────────────────────
 
 def _build_models_context() -> str:
@@ -388,6 +523,34 @@ JSON 必须包含以下字段：
 - 如果用户使用中文抽象描述或明确说"任意目标"，优先用开放词汇模型 YOLO-World-V2
 - 如果模型不支持用户提到的类别，修正为该模型支持的最接近类别
 - 如果完全不明确，返回 {"intent": "other", "recommended_model_id": "YOLO-World-V2", "target_classes": ["object"], "report_required": false, "reason": "任务描述不明确，默认使用开放词汇模型", "confidence": "low"}
+
+## 开放词汇模型 target_classes 保留属性短语规则（★★★ 关键 ★★★）
+当推荐的模型是开放词汇模型（open_vocab）时，**必须**在 target_classes 中保留属性限定词（颜色、大小、状态、外观等），不要将其压缩为仅基础名词。具体要求：
+
+1. 若任务包含颜色/尺寸/外观/状态等修饰词，必须将其合并进英文检测短语
+   - "白色的汽车" / "白车" → ["white car"]  （不是 ["car"]）
+   - "红色车辆" / "红车" → ["red car"]  （不是 ["car"]）
+   - "白色的小兔子" / "白兔" → ["white rabbit"] 或 ["small white rabbit"]  （不是 ["rabbit"]）
+   - "黑色的人" → ["person"]  （颜色不改变人这个类别，保持 person）
+   - "穿橙色背心的人" → ["person wearing orange vest"]  （不是 ["person"]）
+   - "受损的汽车" → ["damaged car"]  （不是 ["car"]）
+   - "聚集的人群" → ["crowd"] 或 ["group of people"]  （不是 ["person"]）
+   - "停放的车辆" → ["parked car"]  （不是 ["car"]）
+
+2. 目标基础词中英文对照参考（小写英文）：
+   - 汽车 / 车辆 / 车 / 小汽车 / 轿车 → car
+   - 卡车 / 大货车 → truck
+   - 公交车 / 大巴 / 巴士 → bus
+   - 人 / 人员 / 行人 / 人体 / 人类 → person（除非有外观修饰）
+   - 兔子 / 小兔子 / 白兔 → rabbit
+   - 猫 → cat
+   - 狗 → dog
+   - 鸟 → bird
+   - 马 → horse
+
+3. 禁止行为：
+   - 禁止将带属性的 open_vocab 任务简化为 ["car"]、["rabbit"]、["person"] 等裸基础词
+   - 禁止在 target_classes 中同时出现 ["car", "red car"]（只需一个完整短语）
 
 ## 人员检测专用模型优先规则
 - 当用户目标仅为"人 / 人员 / 行人 / 人体 / 找人 / 搜救找人"等单一人物检测时，优先推荐专用人体模型，而非通用开放词汇模型或 YOLOv8-Base：
@@ -520,6 +683,14 @@ def parse_detection_task(user_text: str) -> dict:
     # so it will NOT override decisions already made by Steps 3–5
     final_model_id, final_classes, final_reason = _apply_closed_set_priority(
         final_model_id, final_classes, final_reason, user_text
+    )
+
+    # Step 7: Restore attribute phrases for open_vocab models.
+    # If LLM returned a bare noun (car / rabbit / person …) but user_text
+    # clearly contains attribute tokens, try to reconstruct a richer phrase.
+    # Only activates for open_vocab models with a single bare-noun target.
+    final_classes = _restore_attribute_phrases(
+        final_model_id, final_classes, user_text
     )
 
     return {

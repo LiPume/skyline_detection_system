@@ -9,6 +9,7 @@ import { wsStatus as globalWsStatus, isGpuActive } from '@/store/systemStatus'
 import { LATENCY_THROTTLE_THRESHOLD_MS, LATENCY_BAR_MAX_MS } from '@/config'
 import { saveDetection, patchHistoryExtraData } from '@/api/history'
 import { generateReport }     from '@/api/agent'
+import { getModelCapabilities } from '@/api/models'
 import TaskAssistantPanel from '@/components/detection/TaskAssistantPanel.vue'
 
 // ── DOM refs ───────────────────────────────────────────────────────────────────
@@ -723,6 +724,12 @@ function resetToStandby() {
 // ── Task Assistant recommendation handler ──────────────────────────────────────
 
 async function handleApplyRecommendation(rec: AgentRecommendation) {
+  // same-model 兜底标记：若调用前推荐模型已是当前模型，selectModel 会 early return，
+  // postLoadAction 中的 isOpenVocabModel/isClosedSetModel 仍基于旧 capabilities 判断，
+  // 导致 open_vocab 推荐走错 closed_set 分支；需要在 same-model 场景下重新以推荐模型
+  // 的真实 capabilities 类型来写入配置。
+  const wasSameModel = selectedModelId.value === rec.recommended_model_id
+
   // 先切模型，capabilities 加载完成后，在 postLoadAction 中写入类别配置
   await selectModel(rec.recommended_model_id, () => {
     if (isOpenVocabModel.value) {
@@ -737,6 +744,18 @@ async function handleApplyRecommendation(rec: AgentRecommendation) {
       selectedClasses.value = new Set(matched)
     }
   })
+
+  // same-model 兜底：selectModel early return 时 postLoadAction 基于旧 capabilities，
+  // open_vocab 推荐会被错误地走 closed_set 分支；重新以推荐模型真实类型写入配置
+  if (wasSameModel) {
+    const caps = await getModelCapabilities(rec.recommended_model_id)
+    if (!caps) return
+    if (caps.model_type === 'open_vocab') {
+      // 开放词汇模型：直接覆盖 promptInput，不做任何退化或归一化
+      promptInput.value = rec.target_classes.join(', ')
+    }
+    // closed_set 走 selectModel 的 postLoadAction 已处理
+  }
 }
 </script>
 
