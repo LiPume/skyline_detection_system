@@ -121,15 +121,15 @@
 画布居中显示淡入浮层（`model-hint` transition）：
 
 - 首次点击"启动实时分析"后进入 `loading_model` 状态，显示"首次加载模型中…"
-- 若 1 秒后仍处于加载状态，文字变为"模型预热中，首次加载可能需要几秒"
-- 收到后端 `StatusMessage(phase="model_ready")` 后，文字变为"模型已就绪"，0.9 秒后自动消失
+- 若 1 秒后仍处于加载状态，文字变为"模型加载中，首次加载可能需要几秒"
+- 收到后端 `StatusMessage(phase="model_ready")` 后，文字变为"模型已加载"，0.9 秒后自动消失
 - 若期间前端切到其他页面，提示保持不消失（由后端控制模型状态）
 
 ### 4.2.2 模型就绪后的状态切换逻辑
 
 ```
 startAnalysis() → 状态 = loading_model → 提示"首次加载模型中…"
-收到 model_ready → 状态 = analyzing → 提示"模型已就绪" → 900ms 后隐藏
+收到 model_ready → 状态 = analyzing → 提示"模型已加载" → 900ms 后隐藏
 ```
 
 ### 4.3 左侧视觉舞台（Canvas + 拖拽区）
@@ -179,7 +179,7 @@ startAnalysis() → 状态 = loading_model → 提示"首次加载模型中…"
 - 性能监控卡片：
   - 延迟卡片：`bg-slate-800/60 rounded-lg p-3 border border-slate-700/50`
   - 进度条表达节流状态：`h-1.5 bg-slate-700 overflow-hidden`
-  - 推理耗时与吞吐量：`grid grid-cols-2 gap-2`
+  - 推理耗时与吞吐量：`grid grid-cols-4 gap-2`（四卡片：后端处理耗时 / 后端处理 FPS / 纯推理耗时 / 纯推理 FPS）
 - 网络控制：
   - 两个并排按钮：`flex gap-2`，每个 `flex-1 py-2 rounded-lg border text-xs font-medium`
   - hover 的强调色分别落在红/蓝语义上，并由 `disabled:opacity-35` 控制禁用反馈
@@ -779,13 +779,15 @@ send() 失败时（socket 未 OPEN）递增，供诊断使用。
 
 ### 12.2 BBox 绘制
 
-- 按 `class_name` 查 `CLASS_COLORS` 调色板，���匹配用 `DEFAULT_DETECTION_COLOR = #00ff88`
+- 按 `class_name` 查 `CLASS_COLORS` 调色板，若不匹配用 `DEFAULT_DETECTION_COLOR = #00ff88`
 - 半透明填充 + 边框（2px）+ 角 tick 线 + 标签 chip（深色背景，白色文字）
 - 标签 chip 自适应位置（bbox 顶部放不下则移到 bbox 内部下方）
 
 ### 12.3 检测摘要浮层
 
-左下角半透明面板，显示 `CLASS: COUNT` 统计（BBox 绘制前触发）。
+- **左下角**半透明面板，显示 `CLASS: COUNT` 统计（BBox 绘制完成后触发）
+- 仅在 `detections.length > 0` 且 `isPlaying=true`（分析中）或 `finished`（完成态）时显示
+- 完成态的完整摘要卡片（含检测次数、类别分布、结论文本、AI 短报告按钮）另由 Detection.vue 的 FINISHED overlay 浮层负责渲染，不在此浮层内
 
 ---
 

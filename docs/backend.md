@@ -253,12 +253,14 @@ Pydantic v2 数据模型。用 `model_validate` 做 WebSocket 消息校验，格
 
 当前注册模型：
 
-| model_id | runtime_type | model_type | 说明 |
-|----------|-------------|------------|------|
-| `YOLO-World-V2` | pt | open_vocab | ultralytics YOLOWorld，开放词汇 |
-| `YOLOv8-Base` | pt | closed_set | ultralytics YOLOv8n，COCO 80 类 |
-| `YOLOv8-Car` | onnx | closed_set | yolov8_car.onnx，自定义车辆 5 类 |
-| `YOLOv8-VisDrone` | onnx | closed_set | yolov8x_visdrone_best.onnx，VisDrone 10 类 |
+| model_id | runtime_type | model_type | conf_threshold | 说明 |
+|----------|-------------|------------|----------------|------|
+| `YOLO-World-V2` | pt | open_vocab | 0.25 | ultralytics YOLOWorld，开放词汇 |
+| `YOLOv8-Base` | pt | closed_set | 0.25 | ultralytics YOLOv8n，COCO 80 类 |
+| `YOLOv8-Car` | onnx | closed_set | 0.25 | yolov8_car.onnx，自定义车辆 5 类 |
+| `YOLOv8-VisDrone` | onnx | closed_set | 0.25 | yolov8x_visdrone_best.onnx，VisDrone 10 类 |
+| `YOLOv8-Person` | onnx | closed_set | 0.25 | 可见光人体检测专用 ONNX |
+| `YOLOv8-Thermal-Person` | onnx | closed_set | 0.25 | 热红外/弱光人体检测专用 ONNX |
 
 > TensorRT（trt）和 OpenVINO（openvino）的 `runtime_type` 值在 `ModelConfig` 中已预留，但代码中尚未实现对应的 detector 类。
 
@@ -290,7 +292,7 @@ Pydantic v2 数据模型。用 `model_validate` 做 WebSocket 消息校验，格
 PTDetector 子类（每个模型一个，不重复逻辑）：
 - `_YOLOWorldV2`：权重 `yolov8s-worldv2.pt`，conf=0.25，有 GPU 预热
 - `_YOLOv8Base`：权重 `yolov8n.pt`（ultralytics 自动下载），conf=0.25，无预热
-- `_YOLOv8Car`：权重 `.pt`（PT 路径但已标记为备用），conf=0.5，无预热
+- `_YOLOv8Car`（**已废弃PT路径）：代码中保留此子类但 RUNTIME_CONFIG 中 YOLOv8-Car 已切换为 onnx 运行时；该子类实际不会被调用，PT factory 中无对应分支
 
 #### ONNXDetector
 
