@@ -7,13 +7,36 @@
  * 后续替换：
  *   - report.json → 替换 meta / summaryMetrics / classMetrics / scenarios / caseStudies / conclusion
  *   - train_history.csv → 替换 trainingHistory / trainingSummary
+ *
+ * 【本次改动】接入 yolo_final_results.csv：
+ *   - 真实数据替换字段：summaryMetrics.map50 / map50_95 / precision / recall、
+ *     trainingHistory、trainingSummary
+ *   - mock 兜底字段：summaryMetrics.fpsInfer / inferTimeMs、classMetrics、scenarios、
+ *     caseStudies、conclusion、artifacts.prCurveImage
  */
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { performanceReport } from '@/data/performanceReport.mock'
 import type { PerformanceReport } from '@/data/performanceReport.mock'
+import { loadPerformanceCsvData } from '@/data/performanceCsvAdapter'
 
 // ── 当前数据（后续替换为 fetch('report.json')） ────────────────────────────
 const report = ref<PerformanceReport>(performanceReport)
+
+// ── CSV 数据加载（真实数据替换 mock 部分字段） ──────────────────────────────
+// 以下 4 个 summaryMetrics 字段 + trainingHistory + trainingSummary
+// 由 yolo_final_results.csv 提供真实数据，失败时保留 mock 兜底。
+onMounted(async () => {
+  try {
+    const csvData = await loadPerformanceCsvData()
+    // 替换 summaryMetrics 中的 4 个字段
+    Object.assign(report.value.summaryMetrics, csvData.summaryMetrics)
+    // 替换训练历史与摘要
+    report.value.trainingHistory = csvData.trainingHistory
+    report.value.trainingSummary = csvData.trainingSummary
+  } catch {
+    // CSV 加载失败时保留 mock 数据，不做额外处理
+  }
+})
 
 // ── 指标颜色辅助 ────────────────────────────────────────────────────────────
 function metricColor(value: number): string {
