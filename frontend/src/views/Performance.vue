@@ -8,16 +8,16 @@
  *   - report.json → 替换 meta / summaryMetrics / classMetrics / scenarios / caseStudies / conclusion
  *   - train_history.csv → 替换 trainingHistory / trainingSummary
  *
- * 【本次改动】接入 yolo_final_results.csv：
- *   - 真实数据替换字段：summaryMetrics.map50 / map50_95 / precision / recall、
- *     trainingHistory、trainingSummary
- *   - mock 兜底字段：summaryMetrics.fpsInfer / inferTimeMs、classMetrics、scenarios、
- *     caseStudies、conclusion、artifacts.prCurveImage
+ * 【本次改动】接入 pr_curve_plot_data_VisDrone.csv：
+ *   - 新增 PerformancePrCurve.vue 替换原静态 P-R 曲线图片
+ *   - 新增 prCurveCsvAdapter.ts 解析 PR 曲线 CSV
+ *   - 真实数据来源：/metrics/pr_curve_plot_data_VisDrone.csv
  */
 import { ref, computed, onMounted } from 'vue'
 import { performanceReport } from '@/data/performanceReport.mock'
 import type { PerformanceReport } from '@/data/performanceReport.mock'
 import { loadPerformanceCsvData } from '@/data/performanceCsvAdapter'
+import PerformancePrCurve from '@/components/performance/PerformancePrCurve.vue'
 
 // ── 当前数据（后续替换为 fetch('report.json')） ────────────────────────────
 const report = ref<PerformanceReport>(performanceReport)
@@ -56,12 +56,6 @@ function scenarioColor(level: 'good' | 'medium' | 'weak') {
   if (level === 'medium') return { badge: 'bg-yellow-500/15 text-yellow-400 border-yellow-500/25', dot: 'bg-yellow-400', label: '一般' }
   return { badge: 'bg-red-500/15 text-red-400 border-red-500/25', dot: 'bg-red-400', label: '待优化' }
 }
-
-// ── PR 曲线加载状态 ────────────────────────────────────────────────────────
-const prImageError = ref(false)
-const prImageSrc = computed(() => report.value.artifacts.prCurveImage)
-function onPrImageError() { prImageError.value = true }
-function retryPrImage()   { prImageError.value = false }
 
 // ── 案例分析模态框 ─────────────────────────────────────────────────────────
 const activeCaseStudy = ref<PerformanceReport['caseStudies'][number] | null>(null)
@@ -336,41 +330,11 @@ const hasTrainingHistory = computed(() =>
         <div class="px-5 py-4 border-b border-slate-800 flex items-center justify-between">
           <h3 class="text-sm font-medium text-slate-300">P-R 曲线</h3>
           <div class="flex items-center gap-2 text-xs text-slate-500">
-            <span class="px-2 py-0.5 rounded bg-slate-800 border border-slate-700">综合</span>
+            <span class="px-2 py-0.5 rounded bg-slate-800 border border-slate-700">10 类别</span>
           </div>
         </div>
-        <div class="p-6 flex items-center justify-center" style="min-height: 280px;">
-          <template v-if="!prImageError">
-            <div class="relative w-full max-w-2xl rounded-lg overflow-hidden border border-slate-700 bg-slate-900">
-              <img
-                :src="prImageSrc"
-                alt="P-R 曲线"
-                class="w-full h-auto"
-                style="max-height: 260px; object-fit: contain;"
-                @error="onPrImageError"
-              />
-              <div class="absolute inset-0 bg-gradient-to-t from-slate-950/40 to-transparent pointer-events-none"></div>
-            </div>
-          </template>
-          <template v-else>
-            <div class="text-center">
-              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" class="mx-auto mb-3 text-slate-700">
-                <line x1="18" y1="20" x2="18" y2="10"/>
-                <line x1="12" y1="20" x2="12" y2="4"/>
-                <line x1="6" y1="20" x2="6" y2="14"/>
-                <line x1="2" y1="20" x2="22" y2="20"/>
-              </svg>
-              <p class="text-sm font-medium text-slate-500 mb-1">P-R 曲线</p>
-              <p class="text-xs text-slate-600">当前未加载到 P-R 曲线图像，可于后续补充标准评测图像资源</p>
-              <button
-                class="mt-3 px-3 py-1.5 rounded-lg text-xs border border-slate-700 text-slate-500
-                       hover:border-slate-500 hover:text-slate-300 transition-all"
-                @click="retryPrImage"
-              >
-                重试加载
-              </button>
-            </div>
-          </template>
+        <div class="p-6" style="min-height: 360px;">
+          <PerformancePrCurve />
         </div>
       </div>
 
