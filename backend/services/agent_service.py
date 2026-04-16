@@ -61,6 +61,25 @@ _CLOSED_SET_COVERAGE_GROUPS: dict[str, list[frozenset]] = {
 # Person-only model IDs (registered in registry.py MODEL_REGISTRY)
 _PERSON_ONLY_MODELS = {"YOLOv8-Person", "YOLOv8-Thermal-Person"}
 
+# ── Highway / traffic-jam scene keywords ──────────────────────────────────────
+# 规则 1（高速车辆检测）：
+#   "我在高速上要检测车辆" / "巡查高速交通情况" / "看高速路面上的车流"
+#   → YOLOv8-VisDrone + {car, van, truck, bus}
+#
+# 规则 2（堵车 / 拥堵场景）：
+#   "我要找堵车" / "看堵车时有没有人下车" / "检测拥堵路段的车辆和人员活动"
+#   → YOLOv8-VisDrone + {car, van, truck, bus, pedestrian, people}
+_HIGHWAY_KEYWORDS = frozenset({
+    "高速", "高速公路", "高架", "快速路", "道路监控", "道路交通",
+})
+
+_TRAFFIC_JAM_KEYWORDS = frozenset({
+    "堵车", "拥堵", "交通拥堵", "塞车",
+})
+
+_VISDRONE_VEHICLE_CLASSES = ["car", "van", "truck", "bus"]
+_VISDRONE_JAM_CLASSES    = ["car", "van", "truck", "bus", "pedestrian", "people"]
+
 # Keywords that indicate low-light / thermal-infrared scenarios.
 # Matched case-insensitively against the raw user_text.
 _LOW_LIGHT_KEYWORDS = frozenset({
@@ -209,6 +228,63 @@ def _is_person_only_task(user_text: str, target_classes: list[str]) -> bool:
         return False
     class_set = {c.lower().strip() for c in target_classes}
     return (class_set == {"person"} and any(kw in user_text for kw in _PERSON_ONLY_KEYWORDS))
+
+
+def _is_highway_traffic_scene(user_text: str) -> bool:
+    """Return True if user_text explicitly mentions highway / expressway / road traffic."""
+    return any(kw in user_text for kw in _HIGHWAY_KEYWORDS)
+
+
+def _is_traffic_jam_scene(user_text: str) -> bool:
+    """Return True if user_text explicitly mentions traffic jam / congestion."""
+    return any(kw in user_text for kw in _TRAFFIC_JAM_KEYWORDS)
+
+
+def _apply_highway_jam_scene_boost(
+    model_id: str,
+    target_classes: list[str],
+    user_text: str,
+    raw_reason: str,
+    confidence: str,
+) -> tuple[str, list[str], str, str]:
+    """
+    Highway / traffic-jam scene boost: enhance recommendation when user explicitly
+    expresses intent to monitor highway traffic or detect traffic congestion.
+
+    Two supported scenarios:
+      1. Highway vehicle detection → YOLOv8-VisDrone + {car, van, truck, bus}
+         e.g. "我在高速上要检测车辆" / "巡查高速交通情况"
+      2. Traffic jam / congestion   → YOLOv8-VisDrone + {car, van, truck, bus,
+                                                         pedestrian, people}
+         e.g. "我要找堵车" / "看堵车时有没有人下车" / "检测拥堵路段的车辆和人员活动"
+
+    This step runs AFTER Steps 3-5 (unsupported-modality, attribute-constraint,
+    person-only-fallback) and BEFORE Step 6 (closed-set priority), so it will NOT
+    override decisions already made by those guards.
+
+    Returns (final_model_id, final_target_classes, final_reason, final_confidence).
+    """
+    # Priority: traffic-jam scene first, then highway-only
+    is_jam   = _is_traffic_jam_scene(user_text)
+    is_highway = _is_highway_traffic_scene(user_text)
+
+    if not (is_jam or is_highway):
+        return model_id, target_classes, raw_reason, confidence
+
+    # Pick the richer class set for traffic-jam scenes
+    new_classes = _VISDRONE_JAM_CLASSES if is_jam else _VISDRONE_VEHICLE_CLASSES
+
+    final_model_id = "YOLOv8-VisDrone"
+    final_reason   = (
+        f"任务场景为{'高速' if is_highway and not is_jam else ''}"
+        f"{'交通拥堵巡查' if is_jam else '道路交通/高速巡查'}，"
+        f"需要覆盖航拍交通场景下的主要机动车类别（car/van/truck/bus）"
+        f"{'和人员活动类别（pedestrian/people），以便观察拥堵期间人员下车、路边活动等伴随行为' if is_jam else ''}，"
+        f"VisDrone 闭集类别完整覆盖上述目标，优先推荐。"
+    )
+    final_confidence = confidence if confidence == "high" else "medium"
+
+    return final_model_id, new_classes, final_reason, final_confidence
 
 
 def _apply_person_only_fallback(
@@ -675,6 +751,14 @@ def parse_detection_task(user_text: str) -> dict:
     # Step 5: Person-only fallback — override to specialized person model if needed;
     # only triggers when the task is genuinely pure person + no attribute/modality qualifiers
     final_model_id, final_classes, final_reason, final_confidence = _apply_person_only_fallback(
+        final_model_id, final_classes, user_text, final_reason, final_confidence
+    )
+
+    # Step 5.5: Highway / traffic-jam scene boost — enhance recommendation for
+    # expressway vehicle monitoring or congestion detection; runs after person-only
+    # fallback so it will NOT override that decision for pure-person tasks that
+    # don't also mention highway/jam keywords
+    final_model_id, final_classes, final_reason, final_confidence = _apply_highway_jam_scene_boost(
         final_model_id, final_classes, user_text, final_reason, final_confidence
     )
 
