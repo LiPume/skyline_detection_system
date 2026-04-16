@@ -789,6 +789,38 @@ def parse_detection_task(user_text: str) -> dict:
 
 # ── Short Report Generation ──────────────────────────────────────────────────────
 
+# ── Report generation scene-hint detection ───────────────────────────────────────
+# Keywords matched against the original task_prompt (if provided).
+# These are used to add scene context to the report prompt — NOT to fabricate
+# conclusions, only to orient the model toward the right domain language.
+
+_HIGHWAY_REPORT_KEYWORDS  = frozenset({
+    "高速", "高速公路", "高架", "快速路", "道路交通", "道路监控",
+})
+_TRAFFIC_JAM_REPORT_KEYWORDS = frozenset({
+    "堵车", "拥堵", "塞车", "交通拥堵",
+})
+_PERSON_REPORT_KEYWORDS    = frozenset({
+    "人", "人员", "行人", "人体", "找人", "搜救",
+})
+
+
+def _detect_report_scene(task_prompt: str | None) -> str:
+    """
+    Return a scene label based on task_prompt keywords.
+    Returns one of: "highway_traffic" | "traffic_jam" | "person_search" | "general"
+    """
+    if not task_prompt:
+        return "general"
+    if any(kw in task_prompt for kw in _TRAFFIC_JAM_REPORT_KEYWORDS):
+        return "traffic_jam"
+    if any(kw in task_prompt for kw in _HIGHWAY_REPORT_KEYWORDS):
+        return "highway_traffic"
+    if any(kw in task_prompt for kw in _PERSON_REPORT_KEYWORDS):
+        return "person_search"
+    return "general"
+
+
 def generate_short_report(
     model_id: str,
     model_label: str,
@@ -828,42 +860,114 @@ def generate_short_report(
     if not _AGENT_API_KEY:
         raise ValueError("Agent API key 未配置（AGENT_API_KEY 环境变量）")
 
-    # Build class counts string for the prompt
+    # ── Class counts & statistical helpers ─────────────────────────────────────
     class_str = ", ".join(
         f"{item['className']}（{item['count']}次）" for item in class_counts
     ) if class_counts else "无"
 
     duration_str = f"{duration_sec:.1f}秒" if duration_sec else "未知"
 
+    # Detect scene type from task_prompt
+    scene = _detect_report_scene(task_prompt)
+
+    # Check evidence conditions for cautious inference
+    vehicle_classes  = {"car", "van", "truck", "bus", "motor"}
+    person_classes  = {"pedestrian", "people", "person"}
+    detected_set     = {item["className"].lower() for item in class_counts}
+    has_vehicle      = bool(detected_set & vehicle_classes)
+    has_person       = bool(detected_set & person_classes)
+    dominant_class   = class_counts[0]["className"].lower() if class_counts else ""
+    is_dominant_car  = dominant_class in vehicle_classes
+    has_high_density = max_frame_detections >= 10
+
+    # ── Build structured context block ──────────────────────────────────────────
     prompt_parts = [
-        f"检测任务使用 {model_label}（{model_id}）模型，",
-        f"目标类别：{', '.join(target_classes) if target_classes else '未指定'}。",
-        f"检测时长 {duration_str}，",
-        f"系统共记录 {total_detection_events} 次目标事件，",
-        f"共检测到 {detected_class_count} 个不同类别，",
-        f"单帧最大检测数 {max_frame_detections}，",
-        f"各类别分布：{class_str}。",
+        f"【检测模型】{model_label}（{model_id}）",
+        f"【目标类别】{', '.join(target_classes) if target_classes else '未指定'}",
+        f"【检测时长】{duration_str}",
+        f"【总目标事件】{total_detection_events} 次",
+        f"【检测到类别数】{detected_class_count} 类",
+        f"【单帧最大检测数】{max_frame_detections}",
+        f"【类别分布】{class_str}",
     ]
     if task_prompt:
-        prompt_parts.append(f"原始任务描述：{task_prompt}。")
+        prompt_parts.append(f"【用户任务描述】{task_prompt}")
+    if scene != "general":
+        prompt_parts.append(f"【场景类型】{scene}")
 
     detection_context = "\n".join(prompt_parts)
 
-    system_prompt = """你是一个专业的目标检测结果分析助手。
+    # ── Build scene-aware system prompt ────────────────────────────────────────
+    base_instructions = """你是一个专业的目标检测结果分析助手，服务于"空中视角智能检测系统"的比赛展示场景。
 
-## 你的职责
-根据提供的结构化检测摘要数据，生成一段简洁的中文短报告（100-200字），帮助用户快速理解检测结果。
+## 核心原则
+1. **所有结论必须有数据支撑**——报告内容必须严格基于【检测摘要】中的数据，不编造、不夸大、不脑补。
+2. **谨慎推断**——如果检测数据支持某种可能性，可以使用"可能""疑似""提示"等措辞；数据不足时直接描述观测结果，不要强下结论。
+3. **结合任务目标**——如果提供了【用户任务描述】，报告应回应该目标，而不只是罗列统计数字。
+4. **空中视角意识**——本系统处理的是航拍/俯拍视频，目标在画面中通常较小，检测到少量目标也可能是正常稀疏分布，不宜过度解读。
 
-## 报告要求
-- 必须使用中文输出
-- 长度控制在 100-200 字之间
-- 内容包括：使用的模型、主要检测结果、类别分布特征、整体评价
-- 语言简洁专业，不要啰嗦
-- 只需要输出一段文字，不要使用 JSON 或其他格式
-- 不要编造数据，所有数据必须来自用户提供的摘要信息
-- 不要提及"根据您提供的信息"等套话，直接开始描述结果"""
+## 报告风格
+- 100~200 字左右，中文输出
+- 先描述核心发现，再提供整体评价
+- 结尾有结论感，不要只报流水账
+- 直接输出正文，不要前缀"报告："等标签，不要输出 JSON"""
 
-    user_prompt = f"请根据以下检测摘要生成短报告：\n\n{detection_context}"
+    # ── Scene-specific guidance ──────────────────────────────────────────────────
+    # Each block adds domain language orientation; they do NOT override evidence rules.
+    scene_guidance: dict[str, str] = {
+        "traffic_jam": """
+## 交通拥堵场景提示
+当检测到车辆类别（car/van/truck/bus）时：
+  - 若某类车辆（如 car）明显占主导，可描述"画面中车辆目标高度集中，car 占比最高"
+  - 若单帧最大检测数较高，可谨慎提及"画面密度较高，可能存在局部拥堵"
+  - 若同时检测到 pedestrian/people，可提及"出现人员目标，提示可能存在下车查看等伴随行为"
+  - 用词示例："可能存在车流堆积""提示局部通行压力较大""伴随人员活动迹象"
+  - 不要写"确认发生拥堵"，只能说"结合密度判断，可能存在拥堵现象" """,
+        "highway_traffic": """
+## 高速/道路交通巡查场景提示
+关注车辆类型的分布特征：
+  - 描述主要车型（如 car 为主，或 car+truck+bus 混合）
+  - 若多车型同时出现，可提及"多种车型混行"
+  - 关注密度，若单帧检测数较高，可谨慎提及"车流密集"
+  - 不要编造车道信息、速度信息、拥堵时长等画面中没有的数据
+  - 用词示例："车辆以 car 为主""多类型车辆混行""车流密度较高" """,
+        "person_search": """
+## 人员搜索/搜救场景提示
+关注人员目标的检测情况：
+  - 描述检测到的人员目标数量和分布
+  - 若同时有其他类别出现，说明其他目标类型
+  - 谨慎描述搜救相关活动，不确定时不强行推断
+  - 用词示例："画面中检测到人员目标""未检测到人员目标""伴随其他目标出现" """,
+        "general": """
+## 通用场景提示
+- 描述主要检测结果和类别分布特征
+- 如有任务描述，回应任务目标
+- 给出整体评价（检测有效性、覆盖度等）
+- 结尾有结论感 """,
+    }
+
+    system_prompt = base_instructions + (scene_guidance.get(scene, scene_guidance["general"]))
+
+    # ── Reference example (shown only for traffic/vehicle scenes) ───────────────
+    # This is a style reference, not a template to copy verbatim.
+    if scene in ("traffic_jam", "highway_traffic") and has_vehicle:
+        example_block = """
+
+## 参考报告风格（交通/高速场景示例，仅供风格参考，非模板）
+输入摘要特征：
+  - 目标类别：car, van, truck, bus, pedestrian, people
+  - 车辆类别明显占主导，car 为最多数
+  - 单帧最大检测数较高（>= 10）
+  - 出现少量 pedestrian / people 目标
+
+示例风格：
+"本次检测以高速交通巡查为目标，结果显示画面中车辆目标高度集中，主要以 car 为主，同时检测到 truck、bus、van 等车型，并伴随少量 pedestrian/people 目标。结合类别分布与单帧检测密度判断，该场景可能存在车流明显堆积甚至局部拥堵现象；人员目标的出现也提示部分车辆可能处于低速或停滞状态，并伴随下车查看、路侧活动等情况。整体来看，模型较好地覆盖了高速拥堵场景中的主要交通参与目标，为后续交通态势研判提供了有效依据。"
+
+注意：上述仅为风格参考。若输入摘要中不存在 pedestrian/people，不要写相关内容。"""
+    else:
+        example_block = ""
+
+    user_prompt = f"请根据以下检测摘要生成中文短报告：\n\n{detection_context}{example_block}"
 
     try:
         with httpx.Client(timeout=httpx.Timeout(30.0, connect=10.0)) as client:

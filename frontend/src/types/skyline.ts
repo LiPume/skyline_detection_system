@@ -164,6 +164,8 @@ export interface AgentRecommendation {
   report_required: boolean
   reason: string
   confidence: AgentConfidence
+  /** 用户原始任务描述，供 AI 报告生成时使用 */
+  user_text?: string
 }
 
 // ════════════════════════════════════════════════════════════════════════════════
@@ -181,6 +183,7 @@ export interface DetectionSummary {
   maxFrameDetections: number
   durationSec: number | null
   summaryText: string
+  taskPrompt?: string
 }
 
 export interface ExtraData {

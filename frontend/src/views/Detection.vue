@@ -59,6 +59,8 @@ type ReportState = 'idle' | 'generating' | 'done' | 'error'
 const reportState   = ref<ReportState>('idle')
 const reportText    = ref<string | null>(null)
 const reportLoading = computed(() => reportState.value === 'generating')
+/** 记录用户通过任务助手输入的原始任务文本，供 AI 报告生成时使用 */
+const appliedTaskPrompt = ref<string | null>(null)
 
 async function triggerGenerateReport() {
   if (!detectionSummary.value) return
@@ -78,6 +80,7 @@ async function triggerGenerateReport() {
       maxFrameDetections:   detectionSummary.value.maxFrameDetections,
       durationSec:          detectionSummary.value.durationSec,
       summaryText:          detectionSummary.value.summaryText,
+      taskPrompt:           detectionSummary.value.taskPrompt ?? null,
     })
     reportText.value  = resp.reportText
     reportState.value = 'done'
@@ -789,6 +792,7 @@ const detectionSummary = computed<DetectionSummary | null>(() => {
     maxFrameDetections: maxFrameDetections.value,
     durationSec: analysisDuration.value > 0 ? analysisDuration.value : null,
     summaryText,
+    taskPrompt: appliedTaskPrompt.value ?? undefined,
   }
 })
 
@@ -806,11 +810,18 @@ function resetToStandby() {
   analysisState.value = 'standby'
   // 显式清空历史记录 id，防止错写
   currentHistoryId.value = null
+  // 清空任务助手文本，新会话不残留上一轮任务意图
+  appliedTaskPrompt.value = null
 }
 
 // ── Task Assistant recommendation handler ──────────────────────────────────────
 
 async function handleApplyRecommendation(rec: AgentRecommendation) {
+  // 保存用户原始任务文本，供 AI 报告生成使用
+  if (rec.user_text) {
+    appliedTaskPrompt.value = rec.user_text
+  }
+
   // same-model 兜底标记：若调用前推荐模型已是当前模型，selectModel 会 early return，
   // postLoadAction 中的 isOpenVocabModel/isClosedSetModel 仍基于旧 capabilities 判断，
   // 导致 open_vocab 推荐走错 closed_set 分支；需要在 same-model 场景下重新以推荐模型
