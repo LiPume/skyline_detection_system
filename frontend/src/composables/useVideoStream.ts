@@ -62,6 +62,8 @@ interface UseVideoStreamReturn {
   pendingFrameId: Ref<number>
   /** 诊断：pending 已持续多少 ms */
   pendingAgeMs:   Ref<number>
+  /** 渲染门控用：最近一次发送的 frame_id（发送前已自增，故为 frameId - 1） */
+  latestSentFrameId: Ref<number>
 }
 
 export function useVideoStream({
@@ -375,6 +377,9 @@ export function useVideoStream({
   const pendingFrameIdRef = computed<number>(() => pendingFrameId)
   const pendingAgeMsRef   = computed<number>(() => getPendingAgeMs())
 
+  // 渲染门控用：最近一次发送的 frame_id（frameId 发出前已自增，故为 frameId - 1）
+  const latestSentFrameIdRef = computed<number>(() => frameId > 0 ? frameId - 1 : -1)
+
   return {
     sourceType, isPlaying, hasVideo,
     loadFile, selectWebcam, startPush, stopPush, release, resetVideo, ackFrame,
@@ -382,5 +387,7 @@ export function useVideoStream({
     pending:        pendingRef,
     pendingFrameId: pendingFrameIdRef,
     pendingAgeMs:   pendingAgeMsRef,
+    // 渲染门控用
+    latestSentFrameId: latestSentFrameIdRef,
   }
 }

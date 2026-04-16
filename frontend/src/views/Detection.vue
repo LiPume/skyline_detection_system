@@ -188,6 +188,16 @@ function fmt(v: number | null, decimals = 1): string {
 const currentDetections = ref<Detection[]>([])
 const isDragging        = ref(false)
 
+// ── 渲染门控（离线视频模式专用）───────────────────────────────────────────────
+// 用于解决"检测框相对目标有明显延迟/错位"：当 inference_result 返回时，
+// 只有 frame_id 仍然对应当前视频显示进度（<= latestSentFrameId + STALE_THRESHOLD）
+// 才写入 currentDetections；否则丢弃，防止旧框套新画面。
+//
+// STALE_THRESHOLD = 1：允许最多落后 1 帧（容忍极少量迟到结果）。
+// 摄像头模式不走此门控（sourceType === 'webcam' 时忽略）。
+const STALE_THRESHOLD = 1
+const lastAcceptedFrameId = ref<number>(-1)
+
 // ── Detection statistics ───────────────────────────────────────────────────────
 const classCounts     = ref<Record<string, number>>({})
 const totalDetections = computed(() =>
@@ -348,11 +358,24 @@ const { status: wsStatus, connect, disconnect, send, waitForConnected, forceReco
       // ── 系统实时指标 ────────────────────────────────────────────────────
       endToEndLatencyMs.value = (Date.now() / 1000 - r.timestamp) * 1000
 
-      // ── 检测结果写入 ────────────────────────────────────────────────────
-      currentDetections.value = r.detections
-      updateMaxDetections(r.detections.length)
-      for (const d of r.detections) {
-        classCounts.value[d.class_name] = (classCounts.value[d.class_name] ?? 0) + 1
+      // ── 检测结果写入（渲染门控：仅离线视频模式）──────────────────────────
+      // 摄像头模式（sourceType === 'webcam'）：保持原行为，直接写入，不做门控。
+      // 离线视频模式：只接受尚未过期的结果，防止旧框套新画面。
+      //   - 如果 r.frame_id <= lastAcceptedFrameId，说明该结果比已接受结果更旧，丢弃
+      //   - 如果 r.frame_id < latestSentFrameId - STALE_THRESHOLD，说明视频已前进太多，丢弃
+      const isVideoMode = sourceType.value === 'local_file'
+      const isNotStale = isVideoMode
+        ? r.frame_id > lastAcceptedFrameId.value
+          && r.frame_id >= latestSentFrameId.value - STALE_THRESHOLD
+        : true
+
+      if (isNotStale) {
+        currentDetections.value = r.detections
+        lastAcceptedFrameId.value = r.frame_id
+        updateMaxDetections(r.detections.length)
+        for (const d of r.detections) {
+          classCounts.value[d.class_name] = (classCounts.value[d.class_name] ?? 0) + 1
+        }
       }
 
       // ── 背压 ACK：通知推流Composabel该帧已完成 ───────────────────────────────
@@ -447,7 +470,7 @@ const selectedClassesArray = computed<string[]>(() => Array.from(selectedClasses
 const {
   sourceType, isPlaying, hasVideo,
   loadFile, selectWebcam, startPush, stopPush, resetVideo, ackFrame,
-  pending, pendingFrameId, pendingAgeMs,   // 临时调试诊断
+  pending, pendingFrameId, pendingAgeMs, latestSentFrameId,  // 临时调试诊断
 } = useVideoStream({
     videoEl,
     systemLatency: endToEndLatencyMs,
@@ -526,6 +549,7 @@ function startAnalysis() {
     video.currentTime = 0
     currentDetections.value = []
     resetStats()
+    resetRenderGate()
   }
   // Reset stats before new analysis
   resetStats()
@@ -608,6 +632,12 @@ function triggerFilePicker() {
   fileInputEl.value?.click()
 }
 
+// 渲染门控重置（所有状态切换点统一清理，防止残留旧框）
+function resetRenderGate() {
+  lastAcceptedFrameId.value = -1
+}
+
+// ── Reset on standby / file load ───────────────────────────────────────────────
 function onFileChange(e: Event) {
   const file = (e.target as HTMLInputElement).files?.[0]
   if (!file) return
@@ -615,6 +645,7 @@ function onFileChange(e: Event) {
   videoName.value = file.name
   loadFile(file)
   currentDetections.value = []
+  resetRenderGate()
   analysisState.value = 'ready'
 }
 
@@ -629,6 +660,7 @@ function onDrop(e: DragEvent) {
   videoName.value = file.name
   loadFile(file)
   currentDetections.value = []
+  resetRenderGate()
   analysisState.value = 'ready'
 }
 
@@ -637,6 +669,7 @@ async function onSelectWebcam() {
     videoName.value = 'Webcam-' + new Date().toISOString().slice(0, 10)
     await selectWebcam()
     currentDetections.value = []
+    resetRenderGate()
     analysisState.value = 'analyzing'
   } catch {
     showToast('无法访问摄像头，请检查浏览器权限', 'error')
@@ -767,6 +800,7 @@ function resetToStandby() {
   resetVideo()
   currentDetections.value = []
   resetStats()
+  resetRenderGate()
   clearModelHintTimer()
   modelLoadingHint.value = null
   analysisState.value = 'standby'
