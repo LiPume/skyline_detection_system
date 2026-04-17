@@ -55,6 +55,36 @@ export interface GenerateReportRequest {
   durationSec: number | null
   summaryText: string
   taskPrompt?: string | null
+  taskIntent?: string | null
+  concernFocus?: string[]
+  sceneEvidence?: SceneEvidence | null
+}
+
+export interface SceneEvidence {
+  vehicleMix: Record<string, number>
+  laneDensityHint: {
+    leftRegionCount: number
+    centerRegionCount: number
+    rightRegionCount: number
+  }
+  peopleRisk: {
+    pedestrianCount: number
+    peopleCount: number
+    hasPeopleOnRoadSide: boolean
+  }
+  congestionHint: {
+    frameCrowdingHigh: boolean
+    rightLaneHeavier: boolean
+    leftLaneRelativelyClear: boolean
+    suspectedCongestion: boolean
+  }
+  sceneHint: {
+    suspectedHighway: boolean
+    reason: string
+  }
+  confidenceHint: {
+    analysisConfidence: 'high' | 'medium' | 'low'
+  }
 }
 
 export interface GenerateReportResponse {

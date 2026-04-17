@@ -43,7 +43,12 @@ class GenerateReportRequest(BaseModel):
     maxFrameDetections: int = Field(ge=0)
     durationSec: float | None = Field(default=None)
     summaryText: str = Field(default="")
+    # ── 新增：任务上下文 ─────────────────────────────────────────────────────────
     taskPrompt: str | None = Field(default=None)
+    taskIntent: str | None = Field(default=None)
+    concernFocus: list[str] = Field(default_factory=list)
+    # ── 新增：结构化场景证据（由前端启发式计算传入） ───────────────────────────
+    sceneEvidence: dict | None = Field(default=None)
 
 
 class GenerateReportResponse(BaseModel):
@@ -94,6 +99,9 @@ async def generate_report(req: GenerateReportRequest):
             duration_sec=req.durationSec,
             summary_text=req.summaryText,
             task_prompt=req.taskPrompt,
+            task_intent=req.taskIntent,
+            concern_focus=req.concernFocus,
+            scene_evidence=req.sceneEvidence,
         )
         return GenerateReportResponse(reportText=report_text)
     except ValueError as exc:

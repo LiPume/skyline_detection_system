@@ -45,8 +45,34 @@ interface DetectionSummary {
   maxFrameDetections: number
   durationSec: number | null
   summaryText: string
+  sceneEvidence: SceneEvidence | null
 }
-const toasts = ref<Toast[]>([])
+interface SceneEvidence {
+  vehicleMix: Record<string, number>
+  laneDensityHint: {
+    leftRegionCount: number
+    centerRegionCount: number
+    rightRegionCount: number
+  }
+  peopleRisk: {
+    pedestrianCount: number
+    peopleCount: number
+    hasPeopleOnRoadSide: boolean
+  }
+  congestionHint: {
+    frameCrowdingHigh: boolean
+    rightLaneHeavier: boolean
+    leftLaneRelativelyClear: boolean
+    suspectedCongestion: boolean
+  }
+  sceneHint: {
+    suspectedHighway: boolean
+    reason: string
+  }
+  confidenceHint: {
+    analysisConfidence: 'high' | 'medium' | 'low'
+  }
+}
 let toastSeq = 0
 function showToast(text: string, type: Toast['type'] = 'error', ms = 4000) {
   const id = toastSeq++
@@ -59,8 +85,6 @@ type ReportState = 'idle' | 'generating' | 'done' | 'error'
 const reportState   = ref<ReportState>('idle')
 const reportText    = ref<string | null>(null)
 const reportLoading = computed(() => reportState.value === 'generating')
-/** 记录用户通过任务助手输入的原始任务文本，供 AI 报告生成时使用 */
-const appliedTaskPrompt = ref<string | null>(null)
 
 async function triggerGenerateReport() {
   if (!detectionSummary.value) return
@@ -70,6 +94,17 @@ async function triggerGenerateReport() {
   reportText.value  = null
 
   try {
+    // Infer taskIntent from target classes as a lightweight heuristic
+    const clsSet = new Set(detectionSummary.value.targetClasses.map(c => c.toLowerCase()))
+    const _TRAFFIC_CLASSES = new Set(['car', 'van', 'truck', 'bus'])
+    const _PEOPLE_CLASSES   = new Set(['pedestrian', 'people', 'person'])
+    const isTraffic = [..._TRAFFIC_CLASSES].some(c => clsSet.has(c))
+    const isPeople  = [..._PEOPLE_CLASSES].some(c => clsSet.has(c))
+    let taskIntent: string | null = null
+    if (isTraffic && isPeople)         taskIntent = '交通与人员综合分析'
+    else if (isTraffic)               taskIntent = '交通/车辆场景分析'
+    else if (isPeople)                 taskIntent = '人员活动分析'
+
     const resp = await generateReport({
       modelId:              detectionSummary.value.modelId,
       modelLabel:           detectionSummary.value.modelLabel,
@@ -80,7 +115,8 @@ async function triggerGenerateReport() {
       maxFrameDetections:   detectionSummary.value.maxFrameDetections,
       durationSec:          detectionSummary.value.durationSec,
       summaryText:          detectionSummary.value.summaryText,
-      taskPrompt:           detectionSummary.value.taskPrompt ?? null,
+      taskIntent,
+      sceneEvidence:        detectionSummary.value.sceneEvidence,
     })
     reportText.value  = resp.reportText
     reportState.value = 'done'
@@ -233,6 +269,88 @@ function resetStats() {
   // Reset AI report state as well
   reportState.value = 'idle'
   reportText.value  = null
+}
+
+// ── Scene Evidence Heuristics ─────────────────────────────────────────────────
+const _VEHICLE_CLASSES = new Set(['car', 'van', 'truck', 'bus', 'motor'])
+const _HIGHWAY_TRAFFIC_CLASSES = new Set(['car', 'van', 'truck', 'bus'])
+const _PEOPLE_CLASSES = new Set(['pedestrian', 'people', 'person'])
+
+/**
+ * Build a SceneEvidence object from current detection statistics.
+ * This is a heuristic-only inference — no per-frame bounding-box data required.
+ */
+function buildSceneEvidence(classCounts: Record<string, number>): SceneEvidence {
+  const counts = (cls: string) => classCounts[cls] ?? 0
+  const total  = Object.values(classCounts).reduce((a, b) => a + b, 0)
+
+  // Vehicle mix
+  const vehicleMix: Record<string, number> = {}
+  let vehicleTotal = 0
+  for (const cls of _VEHICLE_CLASSES) {
+    vehicleMix[cls] = counts(cls)
+    vehicleTotal += counts(cls)
+  }
+
+  // People risk
+  const pedestrianCount = counts('pedestrian')
+  const peopleCount    = counts('people')
+  const peopleTotal    = pedestrianCount + peopleCount
+
+  // Lane density hint — no per-frame box data, so we distribute evenly across
+  // left/center/right as a structural placeholder (always 0 / 0 / 0 until
+  // real per-frame detection coordinates are available from the store)
+  const laneDensityHint = { leftRegionCount: 0, centerRegionCount: 0, rightRegionCount: 0 }
+
+  // Congestion hint — purely from class distribution statistics
+  const vehicleRatio = total > 0 ? vehicleTotal / total : 0
+  const maxDet = maxFrameDetections.value
+
+  const frameCrowdingHigh = maxDet >= 15 && vehicleRatio >= 0.7
+  const rightLaneHeavier  = false   // requires per-frame bounding-box data
+  const leftLaneRelativelyClear = false  // requires per-frame bounding-box data
+  const suspectedCongestion = frameCrowdingHigh && vehicleRatio >= 0.8
+
+  // Scene hint
+  const highwayVehicleCount = [..._HIGHWAY_TRAFFIC_CLASSES].reduce(
+    (sum, c) => sum + counts(c), 0,
+  )
+  const allVehicleCount = vehicleTotal
+  const highwayRatio = allVehicleCount > 0 ? highwayVehicleCount / allVehicleCount : 0
+
+  const suspectedHighway = highwayRatio >= 0.85 && vehicleRatio >= 0.7
+  const highwayReasons: string[] = []
+  if (vehicleRatio >= 0.7)             highwayReasons.push('车辆类别占主导')
+  if (highwayRatio >= 0.85)            highwayReasons.push('车型以car/van/truck/bus为主')
+  if (maxDet >= 10)                    highwayReasons.push('单帧密度较高')
+  if (peopleTotal / Math.max(total, 1) < 0.1) highwayReasons.push('人员目标占比极低')
+
+  const sceneReason = highwayReasons.length > 0
+    ? highwayReasons.join('、')
+    : '无明显场景特征'
+
+  // Analysis confidence
+  let analysisConfidence: 'high' | 'medium' | 'low' = 'medium'
+  if (total >= 100 && vehicleRatio >= 0.7)  analysisConfidence = 'high'
+  else if (total < 20 || vehicleRatio < 0.3) analysisConfidence = 'low'
+
+  return {
+    vehicleMix,
+    laneDensityHint,
+    peopleRisk: {
+      pedestrianCount,
+      peopleCount,
+      hasPeopleOnRoadSide: peopleTotal > 0 && vehicleTotal > 0 && (peopleTotal / vehicleTotal) < 0.2,
+    },
+    congestionHint: {
+      frameCrowdingHigh,
+      rightLaneHeavier,
+      leftLaneRelativelyClear,
+      suspectedCongestion,
+    },
+    sceneHint: { suspectedHighway, reason: sceneReason },
+    confidenceHint: { analysisConfidence },
+  }
 }
 
 // ── Analysis duration ───────────────────────────────────────────────────────────
@@ -792,7 +910,7 @@ const detectionSummary = computed<DetectionSummary | null>(() => {
     maxFrameDetections: maxFrameDetections.value,
     durationSec: analysisDuration.value > 0 ? analysisDuration.value : null,
     summaryText,
-    taskPrompt: appliedTaskPrompt.value ?? undefined,
+    sceneEvidence: hasAny ? buildSceneEvidence(classCounts.value) : null,
   }
 })
 
@@ -810,18 +928,11 @@ function resetToStandby() {
   analysisState.value = 'standby'
   // 显式清空历史记录 id，防止错写
   currentHistoryId.value = null
-  // 清空任务助手文本，新会话不残留上一轮任务意图
-  appliedTaskPrompt.value = null
 }
 
 // ── Task Assistant recommendation handler ──────────────────────────────────────
 
 async function handleApplyRecommendation(rec: AgentRecommendation) {
-  // 保存用户原始任务文本，供 AI 报告生成使用
-  if (rec.user_text) {
-    appliedTaskPrompt.value = rec.user_text
-  }
-
   // same-model 兜底标记：若调用前推荐模型已是当前模型，selectModel 会 early return，
   // postLoadAction 中的 isOpenVocabModel/isClosedSetModel 仍基于旧 capabilities 判断，
   // 导致 open_vocab 推荐走错 closed_set 分支；需要在 same-model 场景下重新以推荐模型

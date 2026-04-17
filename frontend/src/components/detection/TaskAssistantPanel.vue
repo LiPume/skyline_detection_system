@@ -59,8 +59,7 @@ async function handleParse() {
   startTimers()
 
   try {
-    const rec = await parseTask(text)
-    result.value = { ...rec, user_text: text }
+    result.value = await parseTask(text)
   } catch (err: unknown) {
     errorMsg.value = '任务理解失败，请稍后重试。你也可以直接手动配置模型和类别。'
   } finally {

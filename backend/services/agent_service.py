@@ -789,38 +789,6 @@ def parse_detection_task(user_text: str) -> dict:
 
 # ── Short Report Generation ──────────────────────────────────────────────────────
 
-# ── Report generation scene-hint detection ───────────────────────────────────────
-# Keywords matched against the original task_prompt (if provided).
-# These are used to add scene context to the report prompt — NOT to fabricate
-# conclusions, only to orient the model toward the right domain language.
-
-_HIGHWAY_REPORT_KEYWORDS  = frozenset({
-    "高速", "高速公路", "高架", "快速路", "道路交通", "道路监控",
-})
-_TRAFFIC_JAM_REPORT_KEYWORDS = frozenset({
-    "堵车", "拥堵", "塞车", "交通拥堵",
-})
-_PERSON_REPORT_KEYWORDS    = frozenset({
-    "人", "人员", "行人", "人体", "找人", "搜救",
-})
-
-
-def _detect_report_scene(task_prompt: str | None) -> str:
-    """
-    Return a scene label based on task_prompt keywords.
-    Returns one of: "highway_traffic" | "traffic_jam" | "person_search" | "general"
-    """
-    if not task_prompt:
-        return "general"
-    if any(kw in task_prompt for kw in _TRAFFIC_JAM_REPORT_KEYWORDS):
-        return "traffic_jam"
-    if any(kw in task_prompt for kw in _HIGHWAY_REPORT_KEYWORDS):
-        return "highway_traffic"
-    if any(kw in task_prompt for kw in _PERSON_REPORT_KEYWORDS):
-        return "person_search"
-    return "general"
-
-
 def generate_short_report(
     model_id: str,
     model_label: str,
@@ -832,145 +800,204 @@ def generate_short_report(
     duration_sec: float | None,
     summary_text: str,
     task_prompt: str | None = None,
+    task_intent: str | None = None,
+    concern_focus: list[str] | None = None,
+    scene_evidence: dict | None = None,
 ) -> str:
     """
-    Generate a short AI report based on structured detection summary data.
+    Generate an enriched scene-analysis report based on detection summary data.
 
-    Args:
-        model_id: Model identifier used for detection.
-        model_label: Human-readable model name.
-        target_classes: Target classes that were detected.
-        total_detection_events: Total number of detection events recorded.
-        detected_class_count: Number of distinct classes detected.
-        class_counts: List of {className, count} sorted by frequency.
-        max_frame_detections: Maximum detections in a single frame.
-        duration_sec: Total analysis duration in seconds.
-        summary_text: Local summary text already computed.
-        task_prompt: Optional original task prompt (not required).
+    Compared to the old lightweight summary, this version produces:
+      - Scene judgment (highway / urban road / intersection / parking …)
+      - Phenomenon analysis (congestion, lane imbalance, anomaly, people-on-road …)
+      - Risk assessment (accident signals, bottleneck, stranded people …)
+      - Actionable recommendations (1-3 concrete suggestions)
 
-    Returns:
-        A short Chinese-language report as a plain string.
+    New optional parameters:
+      task_intent:   High-level task label derived from user text, e.g. "高速拥堵分析"
+      concern_focus: List of specific concerns from the user, e.g.
+                     ["是否堵车", "哪侧车道更堵", "是否有人下车"]
+      scene_evidence: Frontend-computed heuristic evidence, e.g.
+                     { vehicleMix, laneDensityHint, peopleRisk, congestionHint, sceneHint }
 
-    Raises:
-        ValueError: If API key is missing.
-        RuntimeError: If the LLM call fails.
+    All new parameters are optional; the function degrades gracefully to the old
+    summary style when they are absent.
     """
     _load_config()
 
     if not _AGENT_API_KEY:
         raise ValueError("Agent API key 未配置（AGENT_API_KEY 环境变量）")
 
-    # ── Class counts & statistical helpers ─────────────────────────────────────
+    # ── Build core detection summary (always present) ──────────────────────────
     class_str = ", ".join(
         f"{item['className']}（{item['count']}次）" for item in class_counts
     ) if class_counts else "无"
 
     duration_str = f"{duration_sec:.1f}秒" if duration_sec else "未知"
 
-    # Detect scene type from task_prompt
-    scene = _detect_report_scene(task_prompt)
-
-    # Check evidence conditions for cautious inference
-    vehicle_classes  = {"car", "van", "truck", "bus", "motor"}
-    person_classes  = {"pedestrian", "people", "person"}
-    detected_set     = {item["className"].lower() for item in class_counts}
-    has_vehicle      = bool(detected_set & vehicle_classes)
-    has_person       = bool(detected_set & person_classes)
-    dominant_class   = class_counts[0]["className"].lower() if class_counts else ""
-    is_dominant_car  = dominant_class in vehicle_classes
-    has_high_density = max_frame_detections >= 10
-
-    # ── Build structured context block ──────────────────────────────────────────
-    prompt_parts = [
-        f"【检测模型】{model_label}（{model_id}）",
-        f"【目标类别】{', '.join(target_classes) if target_classes else '未指定'}",
-        f"【检测时长】{duration_str}",
-        f"【总目标事件】{total_detection_events} 次",
-        f"【检测到类别数】{detected_class_count} 类",
-        f"【单帧最大检测数】{max_frame_detections}",
-        f"【类别分布】{class_str}",
+    core_parts = [
+        f"使用模型：{model_label}（{model_id}）",
+        f"目标类别：{', '.join(target_classes) if target_classes else '未指定'}",
+        f"检测时长：{duration_str}",
+        f"总检测事件：{total_detection_events}次",
+        f"不同类别数：{detected_class_count}",
+        f"单帧最大检测数：{max_frame_detections}",
+        f"类别分布：{class_str}",
     ]
     if task_prompt:
-        prompt_parts.append(f"【用户任务描述】{task_prompt}")
-    if scene != "general":
-        prompt_parts.append(f"【场景类型】{scene}")
+        core_parts.append(f"用户任务描述：{task_prompt}")
 
-    detection_context = "\n".join(prompt_parts)
+    core_context = "\n".join(f"  • {p}" for p in core_parts)
 
-    # ── Build scene-aware system prompt ────────────────────────────────────────
-    base_instructions = """你是一个专业的目标检测结果分析助手，服务于"空中视角智能检测系统"的比赛展示场景。
+    # ── Evidence gate: annotate unavailable evidence types explicitly ──────────────
+    evidence_gate_lines: list[str] = []
+    if scene_evidence:
+        lh = scene_evidence.get("laneDensityHint", {})
+        lh_has_data = any(lh.get(k, 0) > 0 for k in ("leftRegionCount", "centerRegionCount", "rightRegionCount"))
+        if not lh_has_data:
+            evidence_gate_lines.append(
+                "【侧别证据说明】当前无可靠的车道侧别统计（laneDensityHint 全为 0），"
+                "禁止输出\"左通右堵\"\"右道偏重\"\"对该方向限流\"等侧别结论，也禁止提及具体左右差异。"
+            )
+        if scene_evidence.get("confidenceHint", {}).get("analysisConfidence") == "low":
+            evidence_gate_lines.append(
+                "【分析置信度】本次启发式分析置信度为 low，建议以风险提示和巡查建议为主，不要输出强断言。"
+            )
 
-## 核心原则
-1. **所有结论必须有数据支撑**——报告内容必须严格基于【检测摘要】中的数据，不编造、不夸大、不脑补。
-2. **谨慎推断**——如果检测数据支持某种可能性，可以使用"可能""疑似""提示"等措辞；数据不足时直接描述观测结果，不要强下结论。
-3. **结合任务目标**——如果提供了【用户任务描述】，报告应回应该目标，而不只是罗列统计数字。
-4. **空中视角意识**——本系统处理的是航拍/俯拍视频，目标在画面中通常较小，检测到少量目标也可能是正常稀疏分布，不宜过度解读。
+    # ── Build enhanced scene evidence section (only if provided) ──────────────
+    enhanced_context = ""
+    if scene_evidence:
+        ev = scene_evidence
+        lines = ["【场景结构化证据】"]
 
-## 报告风格
-- 100~200 字左右，中文输出
-- 先描述核心发现，再提供整体评价
-- 结尾有结论感，不要只报流水账
-- 直接输出正文，不要前缀"报告："等标签，不要输出 JSON"""
+        # Vehicle mix
+        vm = ev.get("vehicleMix", {})
+        if vm:
+            lines.append(f"  车辆类别计数：car={vm.get('car',0)}, van={vm.get('van',0)}, "
+                          f"truck={vm.get('truck',0)}, bus={vm.get('bus',0)}, motor={vm.get('motor',0)}")
 
-    # ── Scene-specific guidance ──────────────────────────────────────────────────
-    # Each block adds domain language orientation; they do NOT override evidence rules.
-    scene_guidance: dict[str, str] = {
-        "traffic_jam": """
-## 交通拥堵场景提示
-当检测到车辆类别（car/van/truck/bus）时：
-  - 若某类车辆（如 car）明显占主导，可描述"画面中车辆目标高度集中，car 占比最高"
-  - 若单帧最大检测数较高，可谨慎提及"画面密度较高，可能存在局部拥堵"
-  - 若同时检测到 pedestrian/people，可提及"出现人员目标，提示可能存在下车查看等伴随行为"
-  - 用词示例："可能存在车流堆积""提示局部通行压力较大""伴随人员活动迹象"
-  - 不要写"确认发生拥堵"，只能说"结合密度判断，可能存在拥堵现象" """,
-        "highway_traffic": """
-## 高速/道路交通巡查场景提示
-关注车辆类型的分布特征：
-  - 描述主要车型（如 car 为主，或 car+truck+bus 混合）
-  - 若多车型同时出现，可提及"多种车型混行"
-  - 关注密度，若单帧检测数较高，可谨慎提及"车流密集"
-  - 不要编造车道信息、速度信息、拥堵时长等画面中没有的数据
-  - 用词示例："车辆以 car 为主""多类型车辆混行""车流密度较高" """,
-        "person_search": """
-## 人员搜索/搜救场景提示
-关注人员目标的检测情况：
-  - 描述检测到的人员目标数量和分布
-  - 若同时有其他类别出现，说明其他目标类型
-  - 谨慎描述搜救相关活动，不确定时不强行推断
-  - 用词示例："画面中检测到人员目标""未检测到人员目标""伴随其他目标出现" """,
-        "general": """
-## 通用场景提示
-- 描述主要检测结果和类别分布特征
-- 如有任务描述，回应任务目标
-- 给出整体评价（检测有效性、覆盖度等）
-- 结尾有结论感 """,
-    }
+        # Lane density
+        lh = ev.get("laneDensityHint", {})
+        if lh:
+            lines.append(f"  车道密度（左/中/右）：{lh.get('leftRegionCount',0)} / "
+                          f"{lh.get('centerRegionCount',0)} / {lh.get('rightRegionCount',0)}")
 
-    system_prompt = base_instructions + (scene_guidance.get(scene, scene_guidance["general"]))
+        # People risk
+        pr = ev.get("peopleRisk", {})
+        if pr:
+            lines.append(f"  人员风险：pedestrian={pr.get('pedestrianCount',0)}, "
+                          f"people={pr.get('peopleCount',0)}, "
+                          f"路边出现={pr.get('hasPeopleOnRoadSide', False)}")
 
-    # ── Reference example (shown only for traffic/vehicle scenes) ───────────────
-    # This is a style reference, not a template to copy verbatim.
-    if scene in ("traffic_jam", "highway_traffic") and has_vehicle:
-        example_block = """
+        # Congestion hint
+        ch = ev.get("congestionHint", {})
+        if ch:
+            flags = []
+            if ch.get("frameCrowdingHigh"): flags.append("高帧密度")
+            if ch.get("rightLaneHeavier"):  flags.append("右道偏重")
+            if ch.get("leftLaneRelativelyClear"): flags.append("左道相对通畅")
+            if ch.get("suspectedCongestion"): flags.append("疑似拥堵")
+            lines.append(f"  拥堵指标：{', '.join(flags) if flags else '无明显特征'}")
 
-## 参考报告风格（交通/高速场景示例，仅供风格参考，非模板）
-输入摘要特征：
-  - 目标类别：car, van, truck, bus, pedestrian, people
-  - 车辆类别明显占主导，car 为最多数
-  - 单帧最大检测数较高（>= 10）
-  - 出现少量 pedestrian / people 目标
+        # Scene hint
+        sh = ev.get("sceneHint", {})
+        if sh:
+            lines.append(f"  场景推断：疑似={sh.get('suspectedHighway', False)}，"
+                          f"依据={sh.get('reason', '无')}")
 
-示例风格：
-"本次检测以高速交通巡查为目标，结果显示画面中车辆目标高度集中，主要以 car 为主，同时检测到 truck、bus、van 等车型，并伴随少量 pedestrian/people 目标。结合类别分布与单帧检测密度判断，该场景可能存在车流明显堆积甚至局部拥堵现象；人员目标的出现也提示部分车辆可能处于低速或停滞状态，并伴随下车查看、路侧活动等情况。整体来看，模型较好地覆盖了高速拥堵场景中的主要交通参与目标，为后续交通态势研判提供了有效依据。"
+        # Analysis confidence
+        conf = ev.get("confidenceHint", {}).get("analysisConfidence", "medium")
+        lines.append(f"  启发式分析置信度：{conf}")
 
-注意：上述仅为风格参考。若输入摘要中不存在 pedestrian/people，不要写相关内容。"""
-    else:
-        example_block = ""
+        enhanced_context = "\n" + "\n".join(lines)
 
-    user_prompt = f"请根据以下检测摘要生成中文短报告：\n\n{detection_context}{example_block}"
+    # ── Task intent / concern focus (always included if available) ────────────
+    focus_section = ""
+    if task_intent:
+        focus_section += f"\n  任务归纳：{task_intent}"
+    if concern_focus:
+        focus_section += f"\n  用户关注点：{'；'.join(concern_focus)}"
+
+    # ── Build system + user prompts ────────────────────────────────────────────
+    system_prompt = """你是一个专业的交通场景AI分析助手，基于无人机/摄像头目标检测结果生成中文分析报告。
+
+## 核心职责
+根据检测统计摘要和场景结构化证据（若有），判断画面场景类型、分析异常现象、评估风险等级，并给出1-3条与证据强度匹配的建议。
+
+## 输出要求
+- 纯中文输出一段文字，不要JSON、不要列表、不要markdown
+- 字数控制在150-240字之间
+- 语言专业但不使用空洞套话
+- 数字只作为证据引用，不作为叙述主体
+- 优先回答"用户为什么做这次检测"
+
+## 报告结构（隐含在行文中，不是固定格式）
+1. 场景判断：点明像什么场景（高速/城市道路/路口/停车场等）
+2. 现象分析：拥堵程度、分布特征、异常停车、人员出现等
+3. 风险评估：是否存在潜在事故/管控风险/人员滞留等
+4. 建议措施：给出1-3条可落地的建议
+
+## ★★★ 核心约束：建议强度必须与证据匹配 ★★★
+
+### 侧别判断规则（无条件禁止）
+只有在以下条件**同时满足**时才允许输出"左侧/右侧更拥堵、更通畅、对某方向限流"等侧别结论：
+  A. laneDensityHint 存在有效非零统计（left/center/right 不全为 0）
+  B. 且左右差值达到明确阈值（如右比左多 50% 以上）
+否则必须：禁止写"左通右堵"、"右道偏重"、"对该方向限流"，禁止提及任何具体左右差异。
+
+### 速度/移动状态规则（无条件禁止）
+如果输入中没有轨迹、速度或跨帧位移证据：
+  禁止写"左边车速明显更高"、"车辆移动速度不同"、"停滞程度差异明显"；
+可替换为"车辆分布较为集中"、"呈现车流堆积特征"、"疑似存在局部拥堵"。
+
+### 建议分层规则
+- **弱证据时**（只有类别统计 + maxFrameDetections）：只能输出：
+    "继续巡查"、"核查拥堵源头"、"联动上游监控"、"关注路侧人员活动风险"
+- **强证据时**（laneDensityHint 有效数据 或 有明确空间分布证据）：才允许提出：
+    "分车道管控"、"某方向限流"、"临时分流"等具体交通组织建议
+
+## 其他约束
+- 证据不足时用"疑似""可能"表述，不武断下结论
+- 如果是拥堵类任务且检测到人员出现，必须在风险评估中提高等级
+- 不要输出"建议继续观察"类空话，除非证据确实非常弱
+- 不要提及"根据您提供的信息"
+- 报告应像一个经验丰富的交通巡查员在现场做的口头汇报
+
+## Few-shot 示例（克制版 — 注意：本示例无侧别差异证据，禁止模仿侧别结论）
+
+【输入特征】
+  使用模型：YOLOv8-VisDrone
+  目标类别：car, van, truck, bus, pedestrian, people
+  车辆类别计数：car=312, van=48, truck=89, bus=27, motor=15
+  车道密度（左/中/右）：0 / 0 / 0   ← 注意：当前无有效侧别统计，禁止输出侧别差异结论
+  拥堵指标：疑似拥堵
+  场景推断：疑似=是，依据=车辆类别占主导、车型以car/van/truck/bus为主、单帧密度较高
+  启发式分析置信度：high
+  用户任务：检测高速上的堵车现象，并关注是否有异常人员下车
+  任务归纳：高速拥堵分析
+  用户关注点：是否堵车；是否有人下车；建议
+
+【期望报告风格】
+本次检测任务聚焦于高速路段的拥堵现象识别。结合车辆类目标高频出现、单帧检测密度较高以及少量人员目标出现的情况，当前画面呈现出较明显的车流堆积特征，疑似存在局部拥堵或低速通行现象。人员目标的出现提示部分车辆周边可能存在下车查看、路侧活动等风险。建议继续巡查前方路段，结合连续画面或上游监控进一步确认拥堵源头，并重点关注人员在车流边缘区域活动带来的次生安全风险。
+
+## 注意事项
+- 不要复述输入数字（除非有具体分析需要）
+- 禁止在无侧别证据时输出"左通右堵"类结论
+- 报告应像一个经验丰富的交通巡查员在现场做的口头汇报"""
+
+    user_prompt_parts = [f"【检测统计摘要】\n{core_context}"]
+
+    if enhanced_context or focus_section:
+        user_prompt_parts.append(f"\n【任务上下文】{focus_section}")
+        user_prompt_parts.append(enhanced_context)
+
+    if evidence_gate_lines:
+        user_prompt_parts.append("\n【证据可用性约束】\n" + "\n".join(evidence_gate_lines))
+
+    user_prompt = "\n".join(user_prompt_parts)
 
     try:
-        with httpx.Client(timeout=httpx.Timeout(30.0, connect=10.0)) as client:
+        with httpx.Client(timeout=httpx.Timeout(60.0, connect=10.0)) as client:
             response = client.post(
                 f"{_AGENT_BASE_URL}/chat/completions",
                 headers={
@@ -984,7 +1011,7 @@ def generate_short_report(
                         {"role": "user", "content": user_prompt},
                     ],
                     "temperature": 0.3,
-                    "max_tokens": 512,
+                    "max_tokens": 768,
                 },
             )
             response.raise_for_status()
