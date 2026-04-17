@@ -22,15 +22,15 @@ import PerformancePrCurve from '@/components/performance/PerformancePrCurve.vue'
 // ── 当前数据（后续替换为 fetch('report.json')） ────────────────────────────
 const report = ref<PerformanceReport>(performanceReport)
 
-// ── CSV 数据加载（真实数据替换 mock 部分字段） ──────────────────────────────
-// 以下 4 个 summaryMetrics 字段 + trainingHistory + trainingSummary
-// 由 yolo_final_results.csv 提供真实数据，失败时保留 mock 兜底。
+// ── CSV 数据加载（只加载训练历史与摘要，不覆盖顶部核心指标） ─────────────────
+// trainingHistory / trainingSummary 由 yolo_final_results.csv 提供真实数据。
+// 注意：summaryMetrics（mAP@0.5 / mAP@0.5:0.95 / Precision / Recall / FPS）
+//   已由 performanceReport.mock.ts 提供，来源于 system_performance_summary.xlsx，
+//   此处不再覆盖，以保留赛题数据集的评测结果。
 onMounted(async () => {
   try {
     const csvData = await loadPerformanceCsvData()
-    // 替换 summaryMetrics 中的 4 个字段
-    Object.assign(report.value.summaryMetrics, csvData.summaryMetrics)
-    // 替换训练历史与摘要
+    // 只替换训练历史与摘要，不覆盖顶部核心指标
     report.value.trainingHistory = csvData.trainingHistory
     report.value.trainingSummary = csvData.trainingSummary
   } catch {
@@ -176,6 +176,11 @@ const hasTrainingHistory = computed(() =>
       <!-- ╔══════════════════════════════════════════════════════════════════════╗ -->
       <!-- ║  模块 1：评测总览（页面最重要区域）                                    ║ -->
       <!-- ╚══════════════════════════════════════════════════════════════════════╝ -->
+
+      <!-- ── 核心评测指标（数据来源说明） ──────────────────────────────────────── -->
+      <div class="mb-1">
+        <p class="text-xs text-slate-600">以上指标基于赛题提供的 Drone-Vehicle 数据集评测结果</p>
+      </div>
 
       <!-- ── 核心指标 + 模型基本信息横向布局 ─────────────────────────────────── -->
       <div class="grid grid-cols-5 gap-4">

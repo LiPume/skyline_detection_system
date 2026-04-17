@@ -7,6 +7,13 @@
  * 替换说明：
  *  - report.json → 替换 meta / summaryMetrics / classMetrics / scenarios / caseStudies / conclusion
  *  - train_history.csv → 替换 trainingHistory / trainingSummary
+ *
+ * 【本次改动 - 2026-04-17】summaryMetrics 核心指标数据来源于
+ *   public/metrics/system_performance_summary.xlsx（sheet: system_performance_summary）
+ *   Model: best.pt
+ *   数值已正确转换为小数格式（0.81658 → map50）
+ *   FPS 取表中 FPS 字段（58.8）
+ *   Infer Latency / Total Latency / F1-Score 已同步备用（不在顶部卡片展示）
  */
 
 export type PerformanceReport = {
@@ -113,18 +120,28 @@ export const performanceReport: PerformanceReport = {
     modelType: '闭集目标检测',
     runtime: 'PyTorch (.pt)',
     inputSize: 640,
-    datasetName: 'UAV-Car（自建航拍车辆数据集 + VisDrone 补充）',
+    datasetName: 'Drone-Vehicle（赛题数据集）',
     testDate: '2026-04-08',
     author: 'Skyline Team',
   },
+  // ── 核心评测指标（来源：public/metrics/system_performance_summary.xlsx）────────
+  // 数据行：Model Weights = best.pt
+  // mAP@0.5: 0.81658 → 81.7%
+  // mAP@0.5:0.95: 0.57862 → 57.9%
+  // Precision: 0.80779 → 80.8%
+  // Recall: 0.76826 → 76.8%
+  // FPS: 58.8（纯推理）
+  // Infer Latency (ms): 55.58542
+  // Total Latency (ms): 56.38066
+  // F1-Score: 0.78753（备用，不在顶部卡片展示）
   summaryMetrics: {
-    map50: 0.821,
-    map50_95: 0.583,
-    precision: 0.770,
-    recall: 0.817,
-    f1: 0.793,
-    fpsInfer: 25.3,
-    inferTimeMs: 38.7,
+    map50: 0.81658,
+    map50_95: 0.57862,
+    precision: 0.80779,
+    recall: 0.76826,
+    f1: 0.78753,
+    fpsInfer: 58.8,
+    inferTimeMs: 55.58542,
     meetsMapRequirement: true,
     meetsFpsRequirement: true,
   },
