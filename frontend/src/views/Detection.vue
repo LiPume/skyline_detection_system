@@ -515,6 +515,8 @@ const { status: wsStatus, connect, disconnect, send, waitForConnected, forceReco
       if (analysisState.value === 'loading_model') {
         clearModelHintTimer()
         modelLoadingHint.value = null
+        // 兜底：若后端未发送 model_ready，只要收到有效结果即视为已开始分析
+        analysisState.value = 'analyzing'
       }
 
     } else if (msg.message_type === 'error') {
