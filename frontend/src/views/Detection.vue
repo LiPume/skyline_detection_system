@@ -389,11 +389,17 @@ async function autoSave() {
     })
     // 记录 id，用于后续补写 short_report
     currentHistoryId.value = record.id
-    saveState.value = 'saved'
-    showToast('分析记录已保存到历史记录库', 'success', 3000)
   } catch (e: unknown) {
     saveState.value = 'error'
     showToast('保存失败：' + (e instanceof Error ? e.message : '未知错误'), 'error', 5000)
+    return
+  } finally {
+    // 主记录创建成功（不论后续补写是否失败）均标记为 saved，
+    // 防止 patchHistoryExtraData 等后续异步步骤的 catch 将状态错误覆盖为 error
+    if (saveState.value !== 'error') {
+      saveState.value = 'saved'
+      showToast('分析记录已保存到历史记录库', 'success', 3000)
+    }
   }
 }
 
