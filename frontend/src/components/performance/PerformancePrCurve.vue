@@ -176,6 +176,10 @@ const LEGEND_FONT_SIZE = 12
           <clipPath id="chart-area">
             <rect :x="PAD_LEFT" :y="PAD_TOP" :width="CHART_W" :height="CHART_H"/>
           </clipPath>
+          <!-- 图例类别名截断（避免长类名超出数值区域） -->
+          <clipPath id="legend-clip">
+            <rect x="30" y="0" width="80" height="999"/>
+          </clipPath>
         </defs>
 
         <!-- 图表背景 -->
@@ -308,7 +312,7 @@ const LEGEND_FONT_SIZE = 12
           >Classes</text>
 
           <!-- 图例分隔线 -->
-          <line x1="0" y1="10" x2="130" y2="10" stroke="#334155" stroke-width="1"/>
+          <line x1="0" y1="10" x2="140" y2="10" stroke="#334155" stroke-width="1"/>
 
           <!-- 图例项 -->
           <g v-for="(item, idx) in getLegendItems(prData)" :key="item.key">
@@ -322,7 +326,7 @@ const LEGEND_FONT_SIZE = 12
               :stroke-width="item.isAllClasses ? 3 : 2"
               stroke-linecap="round"
             />
-            <!-- 完整标签：类别名 + AP 值 -->
+            <!-- 类别名（左对齐，truncate） -->
             <text
               x="30"
               :y="28 + idx * LEGEND_ROW_HEIGHT"
@@ -330,7 +334,18 @@ const LEGEND_FONT_SIZE = 12
               :font-size="LEGEND_FONT_SIZE"
               font-family="'SF Mono', 'Consolas', monospace"
               :font-weight="item.isAllClasses ? '700' : '400'"
-            >{{ item.label + ' ' + item.ap.toFixed(3) }}</text>
+              clip-path="url(#legend-clip)"
+            >{{ item.label }}</text>
+            <!-- AP 数值（右对齐，固定宽度） -->
+            <text
+              x="160"
+              :y="28 + idx * LEGEND_ROW_HEIGHT"
+              :fill="item.isAllClasses ? '#ffffff' : '#94a3b8'"
+              :font-size="LEGEND_FONT_SIZE"
+              font-family="'SF Mono', 'Consolas', monospace"
+              :font-weight="item.isAllClasses ? '700' : '400'"
+              text-anchor="end"
+            >{{ item.ap.toFixed(3) }}</text>
           </g>
 
           <!-- mAP@0.5 高亮标注 -->
@@ -339,7 +354,7 @@ const LEGEND_FONT_SIZE = 12
             <line
               x1="0"
               :y1="28 + prData.series.length * LEGEND_ROW_HEIGHT + 10"
-              x2="130"
+              x2="140"
               :y2="28 + prData.series.length * LEGEND_ROW_HEIGHT + 10"
               stroke="#475569"
               stroke-width="1"
