@@ -5,13 +5,13 @@
  *
  * 数据来源：performanceReport.mock.ts
  * 后续替换：
- *   - report.json → 替换 meta / summaryMetrics / classMetrics / scenarios / caseStudies / conclusion
+ *   - report.json → 替换 meta / summaryMetrics / scenarios / caseStudies / conclusion
  *   - train_history.csv → 替换 trainingHistory / trainingSummary
+ *   - pr_metrics_table_merged.csv → 替换 classMetrics（十类）
  *
- * 【本次改动】接入 pr_curve_plot_data_VisDrone.csv：
- *   - 新增 PerformancePrCurve.vue 替换原静态 P-R 曲线图片
- *   - 新增 prCurveCsvAdapter.ts 解析 PR 曲线 CSV
- *   - 真实数据来源：/metrics/pr_curve_plot_data_VisDrone.csv
+ * 【本次改动】接入 merged 数据：
+ *   - PerformancePrCurve.vue 使用 prCurveCsvAdapter.ts 读取 pr_curve_plot_data_merged.csv
+ *   - classMetrics 由 pr_metrics_table_merged.csv 提供十类真实数据
  */
 import { ref, computed, onMounted } from 'vue'
 import { performanceReport } from '@/data/performanceReport.mock'
@@ -21,6 +21,14 @@ import PerformancePrCurve from '@/components/performance/PerformancePrCurve.vue'
 
 // ── 当前数据（后续替换为 fetch('report.json')） ────────────────────────────
 const report = ref<PerformanceReport>(performanceReport)
+
+// ── PR 曲线 mAP@0.5（由 metrics 表汇总行提供，不走 adapter 积分值） ───
+const map50Ref = ref<number | null>(null)
+
+// ── classMetrics 排序视图（按 AP@0.5 从大到小） ─────────────────────────
+const sortedClassMetrics = computed(() =>
+  [...report.value.classMetrics].sort((a, b) => b.ap50 - a.ap50)
+)
 
 // ── CSV 数据加载（只加载训练历史与摘要，不覆盖顶部核心指标） ─────────────────
 // trainingHistory / trainingSummary 由 yolo_final_results.csv 提供真实数据。
@@ -35,6 +43,34 @@ onMounted(async () => {
     report.value.trainingSummary = csvData.trainingSummary
   } catch {
     // CSV 加载失败时保留 mock 数据，不做额外处理
+  }
+
+  // 加载 classMetrics CSV（十类数据），覆盖 mock；失败时保留原值
+  try {
+    const resp = await fetch('/metrics/pr_metrics_table_merged.csv')
+    const text = await resp.text()
+    const lines = text.trim().split('\n')
+    // 最后一行为 All (Weighted Mean) 汇总行，从中提取 mAP@0.5
+    const summaryLine = lines[lines.length - 1]
+    const summaryParts = summaryLine.split(',')
+    map50Ref.value = parseFloat(summaryParts[4]) || null
+    // 跳过表头第1行 + 末尾 All (Weighted Mean) 汇总行，取中间十类
+    const dataLines = lines.slice(1, lines.length - 1)
+    report.value.classMetrics = dataLines.map(line => {
+      const parts = line.split(',')
+      return {
+        className: parts[0],
+        label: parts[0],
+        precision: parseFloat(parts[1]) || 0,
+        recall: parseFloat(parts[2]) || 0,
+        ap50: parseFloat(parts[4]) || 0,
+        ap50_95: parseFloat(parts[5]) || 0,
+        support: 0,
+        note: '',
+      }
+    })
+  } catch {
+    // CSV 加载失败时保留原 mock classMetrics
   }
 })
 
@@ -339,7 +375,7 @@ const hasTrainingHistory = computed(() =>
           </div>
         </div>
         <div class="p-6" style="min-height: 360px;">
-          <PerformancePrCurve />
+          <PerformancePrCurve :map50="map50Ref ?? undefined" />
         </div>
       </div>
 
@@ -351,7 +387,7 @@ const hasTrainingHistory = computed(() =>
         </div>
         <div class="space-y-4">
           <div
-            v-for="(cls, i) in report.classMetrics"
+            v-for="(cls, i) in sortedClassMetrics"
             :key="cls.className"
             class="flex items-center gap-4"
           >
@@ -394,14 +430,13 @@ const hasTrainingHistory = computed(() =>
                 <th class="px-5 py-3 text-right text-xs font-medium text-slate-500 uppercase tracking-wider">AP@0.5:0.95</th>
                 <th class="px-5 py-3 text-right text-xs font-medium text-slate-500 uppercase tracking-wider">Precision</th>
                 <th class="px-5 py-3 text-right text-xs font-medium text-slate-500 uppercase tracking-wider">Recall</th>
-                <th class="px-5 py-3 text-right text-xs font-medium text-slate-500 uppercase tracking-wider">样本数</th>
                 <th class="px-5 py-3 text-right text-xs font-medium text-slate-500 uppercase tracking-wider">达指标</th>
               </tr>
             </thead>
             <tbody>
               <tr
-                v-for="cls in report.classMetrics"
-                :key="cls.className"
+                v-for="cls in sortedClassMetrics"
+                :key="cls.className + '-detail'"
                 class="border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors"
               >
                 <td class="px-5 py-3.5">
@@ -423,9 +458,6 @@ const hasTrainingHistory = computed(() =>
                 </td>
                 <td class="px-5 py-3.5 text-right font-mono text-sm text-slate-300">
                   {{ (cls.recall * 100).toFixed(2) }}%
-                </td>
-                <td class="px-5 py-3.5 text-right font-mono text-sm text-slate-400">
-                  {{ cls.support.toLocaleString() }}
                 </td>
                 <td class="px-5 py-3.5 text-right">
                   <span

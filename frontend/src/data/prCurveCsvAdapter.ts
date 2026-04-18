@@ -2,7 +2,7 @@
  * Skyline — PR 曲线 CSV 数据适配器
  *
  * 职责：
- *   - 读取 /metrics/pr_curve_plot_data_VisDrone.csv
+ *   - 读取 /metrics/pr_curve_plot_data_merged.csv
  *   - 解析各类别 PR 曲线数据 points
  *   - 计算每类 AP（沿 recall 方向积分）
  *   - 计算 all classes 平均 PR 曲线与 mAP@0.5
@@ -38,6 +38,8 @@ const CLASS_LABELS: Record<string, string> = {
   'awning-tricycle': 'awning-tricycle',
   bus: 'bus',
   motor: 'motor',
+  freight_car: 'freight_car',
+  person: 'person',
 }
 
 // 调色板（固定顺序，与组件内一致）
@@ -118,7 +120,7 @@ function parseCSV(csvText: string): {
  * 加载 PR 曲线 CSV 数据，解析各类别曲线并计算 AP
  */
 export async function loadPrCurveData(): Promise<PrCurveData> {
-  const response = await fetch('/metrics/pr_curve_plot_data_VisDrone.csv')
+  const response = await fetch('/metrics/pr_curve_plot_data_merged.csv')
   if (!response.ok) {
     throw new Error(`Failed to load PR curve CSV: ${response.status}`)
   }

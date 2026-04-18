@@ -10,7 +10,7 @@
  *
  * 数据来源：prCurveCsvAdapter.ts
  */
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { loadPrCurveData, type PrCurveData } from '@/data/prCurveCsvAdapter'
 
 // ── 调色板（10 个类别，固定配色） ──────────────────────────────────────────
@@ -36,7 +36,7 @@ const CLASS_STROKE_WIDTH = 1.2
 const SVG_W = 840
 const SVG_H = 480
 const PAD_LEFT = 65
-const PAD_RIGHT = 160  // 右侧图例区域，更宽裕
+const PAD_RIGHT = 190  // 右侧图例区域，更宽裕
 const PAD_TOP = 25
 const PAD_BOTTOM = 55
 
@@ -47,6 +47,13 @@ const CHART_H = SVG_H - PAD_TOP - PAD_BOTTOM
 const prData = ref<PrCurveData | null>(null)
 const loading = ref(true)
 const loadError = ref<string | null>(null)
+
+// ── Props：外部传入的 mAP@0.5（优先使用，否则降级到 adapter 计算值） ───────
+const props = defineProps<{
+  map50?: number
+}>()
+
+const displayMap50 = computed(() => props.map50 ?? prData.value?.mAP50 ?? 0)
 
 // ── 数据加载 ─────────────────────────────────────────────────────────────
 onMounted(async () => {
@@ -116,7 +123,7 @@ function getLegendItems(data: PrCurveData): LegendItem[] {
     items.push({
       key: data.allClassesSeries.key,
       label: data.allClassesSeries.label,
-      ap: data.mAP50,
+      ap: displayMap50.value,
       color: ALL_CLASSES_COLOR,
       isAllClasses: true
     })
@@ -345,7 +352,7 @@ const LEGEND_FONT_SIZE = 12
               :font-size="LEGEND_FONT_SIZE + 2"
               font-weight="700"
               font-family="'SF Mono', 'Consolas', monospace"
-            >mAP@0.5: {{ prData.mAP50.toFixed(3) }}</text>
+            >mAP@0.5: {{ displayMap50.toFixed(3) }}</text>
           </g>
         </g>
       </svg>
