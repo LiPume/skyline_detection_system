@@ -7,37 +7,37 @@ const router = useRouter()
 // ── Scene video data ───────────────────────────────────────────────────────────
 const sceneVideos = [
   {
-    key: 'demo-flight',
-    title: '综合飞行视角',
-    subtitle: '复杂航拍画面目标检测演示',
-    src: '/demo/demo_flight.mp4',
-    tag: 'Flight Scene',
+    key: 'yolo-highlights',
+    title: 'YOLO-World 检测集锦',
+    subtitle: '开放词汇目标检测与多目标识别展示',
+    src: '/demo/homepage-showcase/yolo-world-highlights.mp4',
+    tag: 'Open-Vocabulary',
   },
   {
-    key: 'night-car',
-    title: '夜间车辆场景',
-    subtitle: '低照度环境下目标检测演示',
-    src: '/demo/night_car.mp4',
-    tag: 'Night Scene',
+    key: 'highway-patrol',
+    title: '高速公路巡检',
+    subtitle: '面向道路车辆场景的实时检测展示',
+    src: '/demo/homepage-showcase/highway-patrol.mp4',
+    tag: 'Highway',
   },
   {
-    key: 'park-car',
-    title: '园区车辆场景',
-    subtitle: '园区环境车辆目标识别演示',
-    src: '/demo/park_car.mp4',
-    tag: 'Park Scene',
+    key: 'low-light',
+    title: '低照度场景检测',
+    subtitle: '弱光环境下的目标识别与感知展示',
+    src: '/demo/homepage-showcase/low-light.mp4',
+    tag: 'Low Light',
   },
   {
-    key: 'people-park',
-    title: '园区行人场景',
-    subtitle: '多目标行人检测演示',
-    src: '/demo/people_in_park.mp4',
-    tag: 'People Scene',
+    key: 'pedestrians-overpass',
+    title: '天桥行人场景',
+    subtitle: '复杂背景下的行人目标检测展示',
+    src: '/demo/homepage-showcase/pedestrians-on-overpass.mp4',
+    tag: 'Pedestrian',
   },
 ]
 
 // ── Main banner video ─────────────────────────────────────────────────────────
-const mainVideoSrc = '/demo/demo_flight.mp4'
+const mainVideoSrc = '/demo/homepage-showcase/yolo-world-highlights.mp4'
 
 // ── Capability cards ──────────────────────────────────────────────────────────
 const capabilities = [
@@ -55,9 +55,9 @@ const capabilities = [
   },
   {
     icon: '⚡',
-    title: '轻量化实时部署',
-    desc: '优化推理链路与运行时效率，提升视频流实时处理能力',
-    tags: ['ONNX', 'TensorRT', '异步推理'],
+    title: '实时分析与智能交互',
+    desc: '结合实时推理链路与AI任务助手，提升检测过程的交互性',
+    tags: ['ONNX', '模型推荐', 'AI报告'],
   },
 ]
 
@@ -148,7 +148,7 @@ function retryVideo(key: string) {
             <!-- Capability tags -->
             <div class="flex flex-wrap gap-2">
               <span
-                v-for="tag in ['复杂场景稳检', '开放类别扩展', '实时部署优化']"
+                v-for="tag in ['复杂场景稳检', '开放类别扩展', '实时部署优化','AI任务辅助']"
                 :key="tag"
                 class="px-3 py-1 rounded-md text-xs font-medium
                        bg-slate-800 border border-slate-700 text-slate-300
