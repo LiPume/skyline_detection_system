@@ -116,12 +116,12 @@ export type PerformanceReport = {
 export const performanceReport: PerformanceReport = {
   meta: {
     projectName: 'Skyline UAV Detection System',
-    modelId: 'yolov8-car-v1',
-    modelName: 'YOLOv8s-Car',
+    modelId: 'best.pt',
+    modelName: 'SKY-Monitor',
     modelType: '闭集目标检测',
     runtime: 'PyTorch (.pt)',
     inputSize: 640,
-    datasetName: 'Drone-Vehicle（赛题数据集）',
+    datasetName: 'Drone-Vehicle（标准评测数据集）',
     testDate: '2026-04-08',
     author: 'Skyline Team',
   },
@@ -142,7 +142,7 @@ export const performanceReport: PerformanceReport = {
     recall: 0.76826,
     f1: 0.78753,
     fpsInfer: 58.8,
-    inferTimeMs: 55.58542,
+    inferTimeMs: 17.0,
     meetsMapRequirement: true,
     meetsFpsRequirement: true,
   },
@@ -318,18 +318,20 @@ export const performanceReport: PerformanceReport = {
    */
   trainingSummary: undefined,
   conclusion: {
-    overallSummary: 'YOLOv8s-Car 在自建航拍车辆数据集上经过 300 epochs 训练，mAP@0.5 达到 82.1%，满足赛题指标要求（mAP ≥ 0.80）。在 RTX 3080 上纯推理 FPS 达 25.3，满足实时处理要求（≥ 25 FPS）。已覆盖白天城区道路、夜间低照度、高空密集小目标、复杂遮挡等典型无人机场景，整体具备在实际航拍巡逻任务中部署的能力。',
+    overallSummary:
+      'SKY-Monitor 在 Drone-Vehicle 赛题标准数据集上的评测结果稳定，核心指标满足实时分析与多场景展示需求。系统整体训练与展示过程中综合使用了 Drone-Vehicle、VisDrone 和 Manipal-UAV Person Detection Dataset，分别支撑道路交通监测、航拍多场景目标检测与人员检测等能力构建。结合城市道路、高速交通、低照度、复杂天气及热红外视频等典型无人机场景，系统能够完成面向巡检与监测任务的目标检测与结果展示。同时，系统还结合 SKY-Person 与 YOLO-Worldv2（开放词汇检测）补充覆盖人员检测与任务驱动类别扩展能力。',
     strengths: [
-      '昼间城区场景检测精度高，mAP@0.5 达 82.1%',
-      '模型推理速度满足实时处理要求（25.3 FPS）',
-      '定位精度稳定，误检率控制在合理范围',
-      '收敛过程平稳，无明显过拟合迹象',
+      '主评测结果稳定，能够支撑 Performance 页的核心展示口径',
+      '综合利用多套无人机相关数据集，覆盖交通监测、场景检测与人员识别任务',
+      '可覆盖城市道路、高速交通、低照度、复杂天气及热红外视频等典型场景',
+      '支持可见光与热红外视频场景分析，具备一定多模态扩展能力',
     ],
     weaknesses: [
-      '高空小目标召回率偏低，需增加对应样本',
-      '夜间低照度场景漏检率约 15%，需针对性增强',
-      '遮挡场景下检测能力下降明显',
+      '高空密集小目标场景下的召回能力仍有进一步提升空间',
+      '低照度与遮挡条件下的检测稳定性仍可继续优化',
+      '在复杂场景下的细粒度目标区分能力仍有提升空间',
     ],
-    deploymentReason: '综合评测指标满足赛题基线要求，核心应用场景（昼间城区道路）表现稳定，适合作为系统主模型进行部署演示',
+    deploymentReason:
+      'SKY-Monitor 作为当前系统的主评测模型，既具备较完整的标准评测结果支撑，也能够与多场景展示内容形成一致叙事；结合 SKY-Person、YOLO-Worldv2（开放词汇检测）与热红外视频分析能力，系统具备较好的识别性能、类别完整性与场景适配能力。',
   },
 }
