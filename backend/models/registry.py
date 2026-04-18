@@ -172,8 +172,8 @@ RUNTIME_CONFIG: dict[str, ModelConfig] = {
     # ── PT models ──────────────────────────────────────────────────────────────
     "YOLO-World-V2": ModelConfig(
         runtime_type="pt",
-        weight_path=_WEIGHTS_DIR / "yolov8s-worldv2.pt",
-        confidence_threshold=0.3,
+        weight_path=_WEIGHTS_DIR / "yolov8m-worldv2.pt",
+        confidence_threshold=0.15,
         warmup_enabled=True,
         device="cuda:0",
     ),

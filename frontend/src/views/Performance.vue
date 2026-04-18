@@ -501,7 +501,19 @@ const hasTrainingHistory = computed(() =>
             </div>
             <p class="text-xs text-slate-400 leading-relaxed">{{ scenario.description }}</p>
             <!-- 场景示例图 -->
-            <div v-if="scenario.sampleImage" class="mt-3 rounded-md overflow-hidden h-36">
+            <div v-if="scenario.sampleVideo" class="mt-3 rounded-md overflow-hidden h-36">
+              <video
+                :src="scenario.sampleVideo"
+                :alt="scenario.name + ' 示例'"
+                class="w-full h-full object-cover"
+                muted
+                autoplay
+                loop
+                playsinline
+                preload="metadata"
+              ></video>
+            </div>
+            <div v-else-if="scenario.sampleImage" class="mt-3 rounded-md overflow-hidden h-36">
               <img :src="scenario.sampleImage" :alt="scenario.name + ' 示例'" class="w-full h-full object-cover" />
             </div>
             <div v-else class="mt-3 rounded-md overflow-hidden h-8 bg-slate-800/60 border border-slate-700/40 flex items-center justify-center">

@@ -63,7 +63,8 @@ export type PerformanceReport = {
     name: string
     description: string
     performance: 'good' | 'medium' | 'weak'
-    sampleImage: string
+    sampleImage?: string
+    sampleVideo?: string
   }>
   caseStudies: Array<{
     id: string
@@ -72,7 +73,7 @@ export type PerformanceReport = {
     modelName: string
     summary: string
     videoPath: string
-    coverImage: string
+    coverImage?: string
     analysis: {
       sceneDescription: string
       modelPerformance: string
@@ -208,100 +209,101 @@ export const performanceReport: PerformanceReport = {
   },
   scenarios: [
     {
-      name: '白天城市道路',
-      description: '光照充足、视野开阔的城市道路环境，车辆目标尺度适中，背景相对简单',
+      name: '城市交叉路口',
+      description: '无人机俯拍城市交叉路口，多向车流同时汇聚，目标分布密集且尺度差异明显，体现模型在复杂交通场景下的稳定检测能力。',
       performance: 'good',
-      sampleImage: '/demo/demo_flight.png',
+      sampleVideo: '/demo/multi-application-scenes/intersection.mp4',
     },
     {
       name: '夜间低照度',
-      description: '夜间或黄昏时段，低照度条件下车辆灯光干扰明显，目标对比度降低',
-      performance: 'medium',
-      sampleImage: '/demo/night_car.png',
+      description: '低照度夜间场景下，目标整体对比度下降、局部光照不均，进一步考验模型在弱光条件下的感知能力与检测鲁棒性。',
+      performance: 'good',
+      sampleVideo: '/demo/multi-application-scenes/low-light.mp4',
     },
     {
-      name: '高空密集小目标',
-      description: '无人机高空俯拍视角，车辆目标像素占比小，多目标密集分布场景',
-      performance: 'medium',
-      sampleImage: '/demo/park_car.png',
+      name: '航道巡检场景',
+      description: '在航道巡检过程中，关注目标会随任务需求动态变化，因此更依赖开放词汇模型的类别扩展能力，以支持对新增目标的快速适配与灵活识别。',
+      performance: 'good',
+      sampleVideo: '/demo/multi-application-scenes/channel-inspection.mp4',
     },
     {
-      name: '复杂背景 / 遮挡',
-      description: '停车场、建筑物遮挡、树木阴影等复杂背景下目标被部分遮挡的检测场景',
-      performance: 'weak',
-      sampleImage: '/demo/park_car.png',
+      name: '雾霾恶劣天气',
+      description: '雾霾低能见度条件下，目标轮廓与纹理信息受干扰更明显，进一步考验模型在复杂天气环境中的稳定识别与鲁棒检测能力。',
+      performance: 'good',
+      sampleVideo: '/demo/multi-application-scenes/foggy-weather.mp4',
     },
   ],
   caseStudies: [
     {
       id: 'case-01',
-      title: '昼间城区主干道车辆检测',
-      sceneTag: '白天城市道路',
-      modelName: 'YOLOv8s-Car',
-      summary: '模型在昼间城区场景下展现出良好的检测稳定性，mAP@0.5 达到 82.1%，有效区分车辆与背景',
-      videoPath: '/demo/demo_flight.mp4',
-      coverImage: '/demo/demo_flight.png',
+      title: '高速巡检与交通态势监测',
+      sceneTag: '高速交通',
+      modelName: 'SKY-Monitor (闭集目标检测)',
+      summary: 'SKY-Monitor 面向高速巡检场景，可用于车流监测、道路巡查与拥堵态势观察，适合多车道交通目标的持续检测展示。',
+      videoPath: '/demo/typical-scenes/highway-patrol.mp4',
+      coverImage: '/demo/typical-scenes/highway-patrol.jpg',
       analysis: {
-        sceneDescription: '无人机俯拍城市主干道，包含多车道行驶车辆、行人与骑行者，交通流密集，目标尺度从小到大均有分布',
-        modelPerformance: '在昼间城区场景中，YOLOv8s-Car 对车辆目标检测的置信度普遍在 0.8 以上，误检率低，定位框贴合度好',
+        sceneDescription: '无人机沿高速公路飞行，对多车道行驶车辆进行持续观测，场景涵盖正常通行、车流密集与局部拥堵等典型交通状态。',
+        modelPerformance: '系统能够在高速巡检视角下稳定识别道路车辆目标，并为车流状态观察与交通态势分析提供直观支撑。',
         strengths: [
-          '车辆定位框紧贴车身，无明显漂移',
-          '高速行驶车辆仍能保持稳定跟踪检测',
-          '密集车流中重叠目标分离良好',
+          '高速场景下车辆目标检测稳定',
+          '多车道同屏目标识别清晰',
+          '适合车流密度观察与拥堵巡查展示',
+          '可服务于道路巡检与交通监测任务',
         ],
         limitations: [
-          '远距离小目标召回率略有下降',
-          '部分被树叶遮挡的车辆出现漏检',
+          '极端尺度变化场景下检测表现仍会波动',
+          '明暗快速变化区域对检测稳定性有一定影响',
         ],
-        whyRepresentative: '该场景是本系统最核心的应用场景之一，昼间城区路况直接决定了系统在主干道巡逻任务中的实际可用性',
+        whyRepresentative: '该场景直接对应无人机在智慧交通巡检中的典型应用，能够体现系统在高速道路场景下的监测与态势感知能力。',
       },
     },
     {
       id: 'case-02',
-      title: '夜间园区停车场车辆识别',
-      sceneTag: '夜间低照度',
-      modelName: 'YOLOv8s-Car',
-      summary: '夜间低照度环境下检测精度有所下降，但仍满足基本任务需求，漏检主要集中在远距离小目标',
-      videoPath: '/demo/night_car.mp4',
-      coverImage: '/demo/night_car.png',
+      title: '人行天桥人员检测与重点区域巡查',
+      sceneTag: '行人识别',
+      modelName: 'SKY-Person（闭集目标检测）',
+      summary: 'SKY-Person 聚焦人员目标检测，适用于人行天桥、重点区域巡查与人流分布观察等典型应用场景。',
+      videoPath: '/demo/typical-scenes/pedestrians-on-overpass.mp4',
+      coverImage: '/demo/typical-scenes/pedestrians-on-overpass.jpg',
       analysis: {
-        sceneDescription: '夜间园区停车场环境，车灯与环境光源混合，光照条件复杂，存在强曝光与暗区并存的挑战',
-        modelPerformance: '夜间场景下检测置信度整体下降至 0.6~0.75，误检率约 8%，漏检集中在画面边缘区域',
+        sceneDescription: '无人机掠过城市人行天桥，对桥面及周边区域行人进行识别与观察，场景背景结构较复杂，适合展示人员检测特化模型的应用效果。',
+        modelPerformance: '系统能够聚焦人员目标完成稳定检测，适合用于重点区域巡查、人流观察与人员分布分析等任务展示。',
         strengths: [
-          '车灯强曝光区域未出现大面积误检',
-          '近处停放车辆检测稳定',
-          '车尾灯辅助提升了车辆区域激活',
+          '人员目标识别聚焦明确',
+          '复杂背景下仍能保持较稳定的人体检测效果',
+          '适合重点区域巡查与人流观察场景',
+          '有助于展示人员检测特化模型的应用价值',
         ],
         limitations: [
-          '远距离车辆召回率显著下降',
-          '暗区漏检率高于昼间约 15%',
-          '部分建筑反光产生误检',
+          '人员密集遮挡场景下仍可能出现部分漏检',
+          '当前能力聚焦人员目标，不承担开放类别识别任务',
         ],
-        whyRepresentative: '夜间场景是无人机常态化巡逻必须覆盖的时段，该案例体现了模型在低照度条件下的鲁棒性边界',
+        whyRepresentative: '该场景体现了人员检测特化模型在重点区域巡查与人流观察任务中的实际应用价值，是系统多模型协同能力的重要组成部分。',
       },
     },
     {
       id: 'case-03',
-      title: '园区多目标车辆追踪场景',
-      sceneTag: '高空密集小目标',
-      modelName: 'YOLOv8s-Car',
-      summary: '高空俯拍多目标密集分布场景中，模型对小尺度目标的召回能力存在瓶颈，但核心目标检测准确',
-      videoPath: '/demo/park_car.mp4',
-      coverImage: '/demo/park_car.png',
+      title: '开放词汇目标检测能力展示',
+      sceneTag: '开放词汇',
+      modelName: 'YOLO-Worldv2（开放词汇检测）',
+      summary: 'YOLO-Worldv2 支持基于自然语言描述的目标检测，可灵活响应颜色、服装、形象化描述及细粒度短语等开放词汇任务。',
+      videoPath: '/demo/typical-scenes/yolo-world-highlights.mp4',
+      coverImage: '/demo/typical-scenes/yolo-world-highlights.jpg',
       analysis: {
-        sceneDescription: '园区停车场高空俯拍视角，车辆密集分布，行人与车辆尺度差异大，部分目标被建筑物或树木遮挡',
-        modelPerformance: '大尺度车辆 AP 超过 0.85，但小尺度目标（占画面 < 1%）召回率仅约 0.55，整体 mAP@0.5 仍维持在 0.82',
+        sceneDescription: '该案例集锦展示了多类开放词汇表达方式，包括颜色特征、服装描述、形象化短语及细粒度目标表达，更贴近真实任务输入形式。',
+        modelPerformance: '系统可根据任务描述动态扩展关注目标，无需局限于固定类别列表，适合展示开放词汇检测在灵活任务配置下的识别能力。',
         strengths: [
-          '大尺度车辆检测精度优秀，定位准确',
-          '在密集场景中对遮挡目标仍有部分检测能力',
-          '误检率控制在 5% 以内',
+          '支持颜色类目标描述',
+          '支持服装类与形象化短语表达',
+          '目标类别可随任务需求灵活扩展',
+          '更适合任务驱动的开放识别场景展示',
         ],
         limitations: [
-          '高空小目标召回率不足，需数据增强',
-          '遮挡场景下漏检明显',
-          '多目标重叠时存在框重叠现象',
+          '复杂复合短语的表达效果依赖提示词清晰度',
+          '同义或近义表达下的识别结果可能存在波动',
         ],
-        whyRepresentative: '该场景直接对应赛题对"高空密集小目标"检测能力的要求，体现了当前模型的能力边界与后续优化方向',
+        whyRepresentative: '该案例体现了系统从固定闭集检测向任务驱动识别扩展的能力，是项目开放词汇路线最具代表性的展示内容之一。',
       },
     },
   ],
