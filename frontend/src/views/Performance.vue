@@ -19,6 +19,25 @@ import type { PerformanceReport } from '@/data/performanceReport.mock'
 import { loadPerformanceCsvData } from '@/data/performanceCsvAdapter'
 import PerformancePrCurve from '@/components/performance/PerformancePrCurve.vue'
 
+// ── 类别中英文映射（供展示层使用，不修改数据源） ──────────────────────────
+const CLASS_ZH_MAP: Record<string, string> = {
+  'awning-tricycle': '篷布三轮车',
+  'bicycle': '自行车',
+  'bus': '公交车',
+  'car': '小汽车',
+  'freight_car': '货车',
+  'motor': '摩托车',
+  'person': '行人',
+  'tricycle': '三轮车',
+  'truck': '卡车',
+  'van': '面包车',
+}
+
+// ── 获取类别中文名（兜底：未映射则显示原英文） ───────────────────────────
+function getClassZh(className: string): string {
+  return CLASS_ZH_MAP[className] ?? className
+}
+
 // ── 当前数据（后续替换为 fetch('report.json')） ────────────────────────────
 const report = ref<PerformanceReport>(performanceReport)
 
@@ -398,8 +417,8 @@ const hasTrainingHistory = computed(() =>
               >{{ i + 1 }}</span>
             </div>
             <div class="w-20 flex-shrink-0">
-              <div class="text-sm font-medium text-slate-200">{{ cls.label }}</div>
-              <div class="text-xs text-slate-500 font-mono">{{ cls.className }}</div>
+              <div class="text-sm font-medium text-slate-200">{{ cls.className }}</div>
+              <div class="text-xs text-slate-500 font-mono">{{ getClassZh(cls.className) }}</div>
             </div>
             <div class="flex-1 h-3 bg-slate-800 rounded-full overflow-hidden">
               <div
@@ -444,7 +463,10 @@ const hasTrainingHistory = computed(() =>
                     <div class="w-6 h-6 rounded bg-slate-800 border border-slate-700 flex items-center justify-center text-xs font-mono text-slate-400">
                       {{ cls.className.slice(0, 2).toUpperCase() }}
                     </div>
-                    <span class="text-sm text-slate-200">{{ cls.label }}</span>
+                    <div class="flex flex-col">
+                      <span class="text-sm text-slate-200">{{ cls.className }}</span>
+                      <span class="text-xs text-slate-500">{{ getClassZh(cls.className) }}</span>
+                    </div>
                   </div>
                 </td>
                 <td class="px-5 py-3.5 text-right font-mono text-sm font-medium" :style="{ color: apColor(cls.ap50) }">

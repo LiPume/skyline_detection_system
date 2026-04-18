@@ -10,6 +10,7 @@ export type ModelType = 'open_vocab' | 'closed_set'
 export interface ModelCapabilities {
   model_id: string
   display_name: string
+  card_name: string
   model_type: ModelType
   supports_prompt: boolean
   prompt_editable: boolean

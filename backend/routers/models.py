@@ -23,6 +23,7 @@ class ModelCapabilitiesResponse(BaseModel):
     """Full capabilities response for a single model."""
     model_id: str
     display_name: str
+    card_name: str
     model_type: str  # 'open_vocab' | 'closed_set'
     supports_prompt: bool
     prompt_editable: bool

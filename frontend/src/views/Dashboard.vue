@@ -7,13 +7,6 @@ const router = useRouter()
 // ── Scene video data ───────────────────────────────────────────────────────────
 const sceneVideos = [
   {
-    key: 'yolo-highlights',
-    title: 'YOLO-World 检测集锦',
-    subtitle: '开放词汇目标检测与多目标识别展示',
-    src: '/demo/homepage-showcase/yolo-world-highlights.mp4',
-    tag: 'Open-Vocabulary',
-  },
-  {
     key: 'highway-patrol',
     title: '高速公路巡检',
     subtitle: '面向道路车辆场景的实时检测展示',
@@ -33,6 +26,13 @@ const sceneVideos = [
     subtitle: '复杂背景下的行人目标检测展示',
     src: '/demo/homepage-showcase/pedestrians-on-overpass.mp4',
     tag: 'Pedestrian',
+  },
+  {
+    key: 'yolo-highlights',
+    title: 'YOLO-World 检测集锦',
+    subtitle: '开放词汇目标检测与多目标识别展示',
+    src: '/demo/homepage-showcase/yolo-world-highlights.mp4',
+    tag: 'Open-Vocabulary',
   },
 ]
 

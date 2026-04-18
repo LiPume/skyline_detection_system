@@ -1337,23 +1337,13 @@ async function handleApplyRecommendation(rec: AgentRecommendation) {
 
         <!-- Model Info Banner (Phase 3.1) -->
         <div v-if="currentCapabilities" class="mb-4 p-3 rounded-lg border" :class="isOpenVocabModel ? 'bg-blue-500/10 border-blue-500/30' : 'bg-amber-500/10 border-amber-500/30'">
-          <div class="flex items-start justify-between gap-2">
-            <div>
-              <div class="flex items-center gap-2">
-                <span class="text-sm font-medium text-white">{{ currentCapabilities.display_name }}</span>
-                <span class="px-1.5 py-0.5 rounded text-xs" :class="isOpenVocabModel ? 'bg-blue-500/20 text-blue-400' : 'bg-amber-500/20 text-amber-400'">
-                  {{ isOpenVocabModel ? '开放词汇' : '固定类别' }}
-                </span>
-              </div>
-              <p class="text-xs text-slate-400 mt-1">{{ currentCapabilities.description }}</p>
-            </div>
-            <div v-if="modelLoading" class="flex-shrink-0">
-              <svg class="w-4 h-4 text-blue-400 animate-spin" fill="none" viewBox="0 0 24 24">
-                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
-                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
-              </svg>
-            </div>
+          <div class="flex items-center justify-between gap-2">
+            <span class="text-sm font-medium text-white">{{ currentCapabilities.card_name }}</span>
+            <span class="px-1.5 py-0.5 rounded text-xs" :class="isOpenVocabModel ? 'bg-blue-500/20 text-blue-400' : 'bg-amber-500/20 text-amber-400'">
+              {{ isOpenVocabModel ? '开放词汇' : '固定类别' }}
+            </span>
           </div>
+          <p class="text-xs text-slate-400 mt-1">{{ currentCapabilities.description }}</p>
         </div>
 
         <!-- No model selected hint -->

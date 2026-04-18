@@ -43,6 +43,7 @@ class ModelCapabilities:
     """UI-facing metadata for a single model."""
     model_id: str
     display_name: str
+    card_name: str                # 卡片展示用的短名称
     model_type: Literal["open_vocab", "closed_set"]
     supports_prompt: bool          # Can user type arbitrary class names?
     prompt_editable: bool          # Can user freely edit the prompt?
@@ -55,6 +56,7 @@ class ModelCapabilities:
         return {
             "model_id": self.model_id,
             "display_name": self.display_name,
+            "card_name": self.card_name,
             "model_type": self.model_type,
             "supports_prompt": self.supports_prompt,
             "prompt_editable": self.prompt_editable,
@@ -132,6 +134,7 @@ MODEL_REGISTRY: dict[str, ModelCapabilities] = {
     "YOLO-World-V2": ModelCapabilities(
         model_id="YOLO-World-V2",
         display_name="YOLO-Worldv2（开放词汇检测）",
+        card_name="YOLO-Worldv2",
         model_type="open_vocab",
         supports_prompt=True,
         prompt_editable=True,
@@ -142,6 +145,7 @@ MODEL_REGISTRY: dict[str, ModelCapabilities] = {
     "YOLOv8-VisDrone": ModelCapabilities(
         model_id="YOLOv8-VisDrone",
         display_name="SKY-Monitor（通用实时监测模型）",
+        card_name="SKY-Monitor",
         model_type="closed_set",
         supports_prompt=False,
         prompt_editable=False,
@@ -152,6 +156,7 @@ MODEL_REGISTRY: dict[str, ModelCapabilities] = {
     "YOLOv8-Person": ModelCapabilities(
         model_id="YOLOv8-Person",
         display_name="SKY-Person（人员检测特化模型）",
+        card_name="SKY-Person",
         model_type="closed_set",
         supports_prompt=False,
         prompt_editable=False,
@@ -205,8 +210,9 @@ def get_model_capabilities(model_id: str) -> ModelCapabilities | None:
 
 
 def list_all_models() -> list[ModelCapabilities]:
-    """Frontend-facing: all models with UI metadata."""
-    return list(MODEL_REGISTRY.values())
+    """Frontend-facing: all models with UI metadata, in dropdown display order."""
+    ORDER = ["YOLOv8-VisDrone", "YOLOv8-Person", "YOLO-World-V2"]
+    return [MODEL_REGISTRY[k] for k in ORDER]
 
 
 def get_runtime_config(model_id: str) -> ModelConfig | None:
