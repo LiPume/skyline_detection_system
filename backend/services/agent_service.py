@@ -28,47 +28,26 @@ _AGENT_MODEL: str = "deepseek-ai/DeepSeek-V3.2"
 # Maps each closed-set model to a list of frozensets representing equivalent class groups.
 # A target class that appears in one of these sets is considered "covered" by this model.
 _CLOSED_SET_COVERAGE_GROUPS: dict[str, list[frozenset]] = {
-    "YOLOv8-Base": [
-        frozenset({"person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck",
-                    "boat", "traffic light", "fire hydrant", "stop sign", "parking meter", "bench",
-                    "bird", "cat", "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra",
-                    "giraffe", "backpack", "umbrella", "handbag", "tie", "suitcase", "frisbee",
-                    "skis", "snowboard", "sports ball", "kite", "baseball bat", "baseball glove",
-                    "skateboard", "surfboard", "tennis racket", "bottle", "wine glass", "cup",
-                    "fork", "knife", "spoon", "bowl", "banana", "apple", "sandwich", "orange",
-                    "broccoli", "carrot", "hot dog", "pizza", "donut", "cake", "chair", "couch",
-                    "potted plant", "bed", "dining table", "toilet", "tv", "laptop", "mouse",
-                    "remote", "keyboard", "cell phone", "microwave", "oven", "toaster", "sink",
-                    "refrigerator", "book", "clock", "vase", "scissors", "teddy bear", "hair drier",
-                    "toothbrush"}),
-    ],
-    "YOLOv8-Car": [
-        frozenset({"car", "truck", "bus", "van", "freight_car"}),
-    ],
     "YOLOv8-VisDrone": [
         frozenset({"pedestrian", "people", "bicycle", "car", "van", "truck",
                     "tricycle", "awning-tricycle", "bus", "motor"}),
     ],
-    # Person-only specialized models — covered by person detection only
     "YOLOv8-Person": [
-        frozenset({"person"}),
-    ],
-    "YOLOv8-Thermal-Person": [
         frozenset({"person"}),
     ],
 }
 
 # Person-only model IDs (registered in registry.py MODEL_REGISTRY)
-_PERSON_ONLY_MODELS = {"YOLOv8-Person", "YOLOv8-Thermal-Person"}
+_PERSON_ONLY_MODELS = {"YOLOv8-Person"}
 
 # ── Highway / traffic-jam scene keywords ──────────────────────────────────────
 # 规则 1（高速车辆检测）：
 #   "我在高速上要检测车辆" / "巡查高速交通情况" / "看高速路面上的车流"
-#   → YOLOv8-VisDrone + {car, van, truck, bus}
+#   → YOLOv8-VisDrone (SKY-Monitor) + {car, van, truck, bus}
 #
 # 规则 2（堵车 / 拥堵场景）：
 #   "我要找堵车" / "看堵车时有没有人下车" / "检测拥堵路段的车辆和人员活动"
-#   → YOLOv8-VisDrone + {car, van, truck, bus, pedestrian, people}
+#   → YOLOv8-VisDrone (SKY-Monitor) + {car, van, truck, bus, pedestrian, people}
 _HIGHWAY_KEYWORDS = frozenset({
     "高速", "高速公路", "高架", "快速路", "道路监控", "道路交通",
 })
@@ -252,9 +231,9 @@ def _apply_highway_jam_scene_boost(
     expresses intent to monitor highway traffic or detect traffic congestion.
 
     Two supported scenarios:
-      1. Highway vehicle detection → YOLOv8-VisDrone + {car, van, truck, bus}
+      1. Highway vehicle detection → YOLOv8-VisDrone (SKY-Monitor) + {car, van, truck, bus}
          e.g. "我在高速上要检测车辆" / "巡查高速交通情况"
-      2. Traffic jam / congestion   → YOLOv8-VisDrone + {car, van, truck, bus,
+      2. Traffic jam / congestion   → YOLOv8-VisDrone (SKY-Monitor) + {car, van, truck, bus,
                                                          pedestrian, people}
          e.g. "我要找堵车" / "看堵车时有没有人下车" / "检测拥堵路段的车辆和人员活动"
 
@@ -280,7 +259,7 @@ def _apply_highway_jam_scene_boost(
         f"{'交通拥堵巡查' if is_jam else '道路交通/高速巡查'}，"
         f"需要覆盖航拍交通场景下的主要机动车类别（car/van/truck/bus）"
         f"{'和人员活动类别（pedestrian/people），以便观察拥堵期间人员下车、路边活动等伴随行为' if is_jam else ''}，"
-        f"VisDrone 闭集类别完整覆盖上述目标，优先推荐。"
+        f"SKY-Monitor 闭集类别完整覆盖上述目标，优先推荐。"
     )
     final_confidence = confidence if confidence == "high" else "medium"
 
@@ -296,16 +275,13 @@ def _apply_person_only_fallback(
 ) -> tuple[str, list[str], str, str]:
     """
     Person-only fallback: if the parsed result is person-only, override the model
-    to the appropriate specialized person detector.
+    to the specialized person detector (YOLOv8-Person / SKY-Person).
 
     IMPORTANT — boundary guards:
       1. Attribute-constrained tasks (e.g. "穿红衣服的人", "找戴帽子的人")
          must NOT be overridden — the Step 4 open-vocab decision stands.
       2. Unsupported-modality tasks (thermal/IR) must NOT be overridden —
          the Step 3 capability-boundary disclaimer (confidence=low) stands.
-         We intentionally do NOT force-switch to YOLOv8-Thermal-Person here,
-         because doing so would silently lift the "low confidence" signal that
-         Step 3 carefully planted.
 
     Returns (final_model_id, final_target_classes, final_reason, final_confidence).
     """
@@ -324,7 +300,7 @@ def _apply_person_only_fallback(
     final_model_id = "YOLOv8-Person"
     final_target_classes = ["person"]
     final_reason = (
-        "检测任务为人员/人体识别，强制使用专用人体模型 YOLOv8-Person 以获得更精确的检测效果。"
+        "检测任务为人员/人体识别，强制使用专用人体模型 SKY-Person 以获得更精确的检测效果。"
     )
     final_confidence = "high"
 
@@ -594,8 +570,8 @@ JSON 必须包含以下字段：
 }
 
 ## 保守策略
-- 如果用户提到"汽车、车辆、卡车、公交车"等，优先用车辆专用模型（YOLOv8-Car 或 VisDrone）
-- 如果用户提到 COCO 常见目标（人、猫、狗、杯子等），推荐 YOLOv8-Base
+- 如果用户提到"汽车、车辆、卡车、公交车"等，结合高速公路或拥堵场景关键词，优先推荐 SKY-Monitor（YOLOv8-VisDrone）
+- 如果用户提到行人、人员、搜救找人等，优先推荐专用人员模型 SKY-Person（YOLOv8-Person）
 - 如果用户使用中文抽象描述或明确说"任意目标"，优先用开放词汇模型 YOLO-World-V2
 - 如果模型不支持用户提到的类别，修正为该模型支持的最接近类别
 - 如果完全不明确，返回 {"intent": "other", "recommended_model_id": "YOLO-World-V2", "target_classes": ["object"], "report_required": false, "reason": "任务描述不明确，默认使用开放词汇模型", "confidence": "low"}
@@ -629,10 +605,8 @@ JSON 必须包含以下字段：
    - 禁止在 target_classes 中同时出现 ["car", "red car"]（只需一个完整短语）
 
 ## 人员检测专用模型优先规则
-- 当用户目标仅为"人 / 人员 / 行人 / 人体 / 找人 / 搜救找人"等单一人物检测时，优先推荐专用人体模型，而非通用开放词汇模型或 YOLOv8-Base：
-    • 正常光照 / 可见光场景：YOLOv8-Person（target_classes=["person"]）
-    • 弱光 / 夜间 / 热成像 / 红外 / 夜视等场景：YOLOv8-Thermal-Person（target_classes=["person"]）
-- 上述人员专用模型仅适用于纯 person 检测任务；混合多类别任务（车辆+行人、无人机+人员等）保持现有推荐逻辑不变
+- 当用户目标仅为"人 / 人员 / 行人 / 人体 / 找人 / 搜救找人"等单一人物检测时，优先推荐专用人体模型 SKY-Person（YOLOv8-Person）
+- 上述人员专用模型仅适用于纯 person 检测任务；混合多类别任务（车辆+行人等）保持现有推荐逻辑不变
 - 推荐的人员模型 ID 必须在上述可用模型列表中，禁止返回未注册模型 ID"""
 
 
@@ -966,7 +940,7 @@ def generate_short_report(
 ## Few-shot 示例（克制版 — 注意：本示例无侧别差异证据，禁止模仿侧别结论）
 
 【输入特征】
-  使用模型：YOLOv8-VisDrone
+  使用模型：SKY-Monitor（原 YOLOv8-VisDrone）
   目标类别：car, van, truck, bus, pedestrian, people
   车辆类别计数：car=312, van=48, truck=89, bus=27, motor=15
   车道密度（左/中/右）：0 / 0 / 0   ← 注意：当前无有效侧别统计，禁止输出侧别差异结论

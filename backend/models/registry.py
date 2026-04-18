@@ -131,7 +131,7 @@ VISDRONE_CLASSES = [
 MODEL_REGISTRY: dict[str, ModelCapabilities] = {
     "YOLO-World-V2": ModelCapabilities(
         model_id="YOLO-World-V2",
-        display_name="YOLO-World V2",
+        display_name="YOLO-Worldv2（开放词汇检测）",
         model_type="open_vocab",
         supports_prompt=True,
         prompt_editable=True,
@@ -139,56 +139,25 @@ MODEL_REGISTRY: dict[str, ModelCapabilities] = {
         class_filter_enabled=False,
         description="开放词汇目标检测，支持自定义任意类别。输入自然语言描述即可检测。",
     ),
-    "YOLOv8-Base": ModelCapabilities(
-        model_id="YOLOv8-Base",
-        display_name="YOLOv8 Base (COCO)",
-        model_type="closed_set",
-        supports_prompt=False,
-        prompt_editable=False,
-        supported_classes=COCO_CLASSES,
-        class_filter_enabled=True,
-        description="COCO 预训练模型，支持 80 类固定类别。不可自定义类别，但可筛选显示。",
-    ),
-    "YOLOv8-Car": ModelCapabilities(
-        model_id="YOLOv8-Car",
-        display_name="YOLOv8 Car (Custom)",
-        model_type="closed_set",
-        supports_prompt=False,
-        prompt_editable=False,
-        supported_classes=VEHICLE_CLASSES,
-        class_filter_enabled=True,
-        description="车辆专用模型（ONNX），Fine-tuned on car, truck, bus, van, freight_car。不可自定义类别，但可筛选显示。",
-    ),
     "YOLOv8-VisDrone": ModelCapabilities(
         model_id="YOLOv8-VisDrone",
-        display_name="YOLOv8 VisDrone",
+        display_name="SKY-Monitor（通用实时监测模型）",
         model_type="closed_set",
         supports_prompt=False,
         prompt_editable=False,
         supported_classes=VISDRONE_CLASSES,
         class_filter_enabled=True,
-        description="VisDrone 数据集 Fine-tuned 模型，支持 pedestrian, people, bicycle, car, van, truck, tricycle, awning-tricycle, bus, motor 十类。",
+        description="通用航拍场景目标检测模型，支持 pedestrian, people, bicycle, car, van, truck, tricycle, awning-tricycle, bus, motor 十类，适合道路监控与交通巡查。",
     ),
-    # ── Person-only specialized models ────────────────────────────────────────
     "YOLOv8-Person": ModelCapabilities(
         model_id="YOLOv8-Person",
-        display_name="YOLOv8 Person (可见光专用)",
+        display_name="SKY-Person（人员检测特化模型）",
         model_type="closed_set",
         supports_prompt=False,
         prompt_editable=False,
         supported_classes=["person"],
         class_filter_enabled=True,
         description="可见光场景人体检测专用模型（ONNX），Fine-tuned on person 类。适合正常光照条件下的行人、人员、人体检测。",
-    ),
-    "YOLOv8-Thermal-Person": ModelCapabilities(
-        model_id="YOLOv8-Thermal-Person",
-        display_name="YOLOv8 Thermal Person (热红外专用)",
-        model_type="closed_set",
-        supports_prompt=False,
-        prompt_editable=False,
-        supported_classes=["person"],
-        class_filter_enabled=True,
-        description="热红外/弱光场景人体检测专用模型（ONNX），针对夜间、弱光、低照度、热成像、红外等环境下的人体识别 Fine-tuned。",
     ),
 }
 
@@ -204,44 +173,22 @@ RUNTIME_CONFIG: dict[str, ModelConfig] = {
     "YOLO-World-V2": ModelConfig(
         runtime_type="pt",
         weight_path=_WEIGHTS_DIR / "yolov8s-worldv2.pt",
-        confidence_threshold=0.25,
+        confidence_threshold=0.3,
         warmup_enabled=True,
-        device="cuda:0",
-    ),
-    "YOLOv8-Base": ModelConfig(
-        runtime_type="pt",
-        weight_path="yolov8n.pt",          # ultralytics auto-downloads to ~/.cache/
-        confidence_threshold=0.25,
-        warmup_enabled=False,              # Small model, no warmup needed
         device="cuda:0",
     ),
 
     # ── ONNX models ──────────────────────────────────────────────────────────
-    "YOLOv8-Car": ModelConfig(
-        runtime_type="onnx",
-        weight_path=_WEIGHTS_DIR / "yolov8_car.onnx",
-        confidence_threshold=0.25,
-        warmup_enabled=True,
-        device="cuda:0",                   # CUDAExecutionProvider when onnxruntime-gpu installed
-    ),
     "YOLOv8-VisDrone": ModelConfig(
         runtime_type="onnx",
         weight_path=_WEIGHTS_DIR / "VisDrone" / "yolov8x_visdrone_best.onnx",
-        confidence_threshold=0.25,
+        confidence_threshold=0.4,
         warmup_enabled=True,
         device="cuda:0",
     ),
-    # ── Person-only specialized ONNX models ──────────────────────────────────
     "YOLOv8-Person": ModelConfig(
         runtime_type="onnx",
         weight_path=_WEIGHTS_DIR / "person_only" / "best_person.onnx",
-        confidence_threshold=0.25,
-        warmup_enabled=True,
-        device="cuda:0",
-    ),
-    "YOLOv8-Thermal-Person": ModelConfig(
-        runtime_type="onnx",
-        weight_path=_WEIGHTS_DIR / "person_only" / "best_thermal_person.onnx",
         confidence_threshold=0.25,
         warmup_enabled=True,
         device="cuda:0",

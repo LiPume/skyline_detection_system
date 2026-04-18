@@ -4,8 +4,9 @@
  * 轻量级自然语言任务解析建议面板。
  * 只展示推荐结果，不修改现有 Detection 表单状态。
  */
-import { ref, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { parseTask } from '@/api/agent'
+import { listModels } from '@/api/models'
 import type { AgentRecommendation } from '@/types/skyline'
 
 const emit = defineEmits<{ 'apply-recommendation': [rec: AgentRecommendation] }>()
@@ -16,6 +17,9 @@ const userInput       = ref('')
 const isLoading       = ref(false)
 const result          = ref<AgentRecommendation | null>(null)
 const errorMsg        = ref<string | null>(null)
+
+// model_id → display_name 映射，用于推荐结果展示
+const modelNameMap    = ref<Record<string, string>>({})
 
 // 阶段提示
 const stageIndex      = ref(0)
@@ -45,6 +49,7 @@ function stopTimers() {
   longWaitShown.value = false
 }
 
+onMounted(loadModelNameMap)
 onUnmounted(stopTimers)
 
 // ── Actions ───────────────────────────────────────────────────────────────────
@@ -78,6 +83,25 @@ function confidenceColor(c: string): string {
 
 function confidenceBg(c: string): string {
   return { high: 'bg-emerald-500/10 border-emerald-500/30', medium: 'bg-amber-500/10 border-amber-500/30', low: 'bg-slate-800/50 border-slate-700/50' }[c] ?? 'bg-slate-800/50 border-slate-700/50'
+}
+
+// 加载 model_id → display_name 映射
+async function loadModelNameMap() {
+  try {
+    const resp = await listModels()
+    const map: Record<string, string> = {}
+    for (const m of resp.models) {
+      map[m.model_id] = m.display_name
+    }
+    modelNameMap.value = map
+  } catch {
+    // 网络错误不影响任务理解，映射失败时展示兜底 model_id
+  }
+}
+
+// 根据 model_id 获取展示名，映射失败则兜底原 model_id
+function getDisplayName(modelId: string): string {
+  return modelNameMap.value[modelId] ?? modelId
 }
 </script>
 
@@ -156,7 +180,7 @@ function confidenceBg(c: string): string {
         <!-- 推荐模型 -->
         <div class="flex items-center justify-between">
           <span class="text-xs text-slate-500">推荐模型</span>
-          <span class="text-xs font-semibold text-white">{{ result.recommended_model_id }}</span>
+          <span class="text-xs font-semibold text-white">{{ getDisplayName(result.recommended_model_id) }}</span>
         </div>
 
         <!-- 确信度 -->
