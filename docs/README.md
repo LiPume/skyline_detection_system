@@ -23,7 +23,7 @@
 | 视频文件分析 | 本地 MP4/AVI 等视频文件，实时逐帧推理 |
 | 摄像头实时分析 | 支持接入网络摄像头或 USB 摄像头进行实时检测 |
 | 开放词汇检测 | YOLO-World-V2，支持用户自定义英文类别词（car, person, drone...） |
-| 固定类别检测 | YOLOv8 系列，针对 COCO / 车辆 / VisDrone / 人员 / 热成像等场景 |
+| 固定类别检测 | YOLOv8 系列，针对 VisDrone 航拍 10 类 / 人员等场景 |
 | AI 任务助手 | 自然语言描述任务，自动推荐合适的模型与类别组合 |
 | AI 短报告生成 | 检测完成后，基于检测统计生成结构化中文分析报告 |
 | 历史记录管理 | 保存/查看/删除/导出历史检测任务（视频、JSON 数据） |
@@ -31,14 +31,11 @@
 
 ### 2.2 已集成模型
 
-| 模型 | 类型 | 说明 |
+| 模型 | 类型 | 描述 |
 |------|------|------|
 | YOLO-World-V2 | open_vocab | 开放词汇，适用自定义类别（推荐） |
-| YOLOv8-Base | closed_set | COCO 80 类基准模型 |
-| YOLOv8-Car | closed_set | 车辆专项（car/truck/bus/bicycle/motorcycle） |
-| YOLOv8-VisDrone | closed_set | VisDrone 航拍 10 类 |
-| YOLOv8-Person | closed_set | 人员专项（高精度） |
-| YOLOv8-Thermal-Person | closed_set | 热成像/红外人员检测 |
+| YOLOv8-VisDrone / SKY-Monitor | closed_set | VisDrone 航拍 10 类（pedestrian, people, bicycle, car, van, truck, tricycle, awning-tricycle, bus, motor） |
+| YOLOv8-Person / SKY-Person | closed_set | 人员专项（高精度） |
 
 ### 2.3 评测数据来源
 
@@ -58,10 +55,10 @@
 **主要操作流程**：
 
 1. **选择视频来源**：上传本地视频文件，或接入实时摄像头
-2. **选择模型**：从下拉菜单选择检测模型（6 个可选）
+2. **选择模型**：从下拉菜单选择检测模型（3 个可选）
 3. **配置类别**：
-   - 开放词汇模型：输入英文类别词（支持快捷芯片 car/person/drone 等）
-   - 固定类别模型：从类别列表中勾选要检测的类别
+   - 开放词汇模型（YOLO-World-V2）：输入英文类别词（支持快捷芯片 car/person/drone 等）
+   - 固定类别模型（SKY-Monitor / SKY-Person）：从类别列表中勾选要检测的类别
 4. **启动分析**：点击"启动实时分析"，后端开始推理
 5. **查看结果**：实时视频画面叠加检测框，右侧显示当前帧检测数量与帧率
 6. **任务助手**（可选）：在右侧面板输入自然语言（"帮我检测视频中的汽车和行人"），点击理解任务获取推荐配置，一键应用
@@ -95,7 +92,7 @@
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                     前端 (Vue 3 + TS)                    │
-│  Detection.vue / History.vue / Performance.vue / ...   │
+│  views/Dashboard / Detection / History / Performance...  │
 │  ├── composables: useWebSocket / useVideoStream        │
 │  ├──         useCanvasRenderer / useModelConfig          │
 │  └── api: agent.ts / history.ts / models.ts             │
@@ -112,7 +109,7 @@
                │                             │
 ┌──────────────▼──────────────┐  ┌───────────▼────────────┐
 │    推理引擎                  │  │  Agent 服务             │
-│  PTDetector (YOLO)          │  │  SiliconFlow API        │
+│  PTDetector (YOLO-World)    │  │  SiliconFlow API        │
 │  ONNXDetector (onnxruntime) │  │  (DeepSeek-V3.2)        │
 │  InferenceScheduler (LIFO)  │  │                         │
 └──────────────┬──────────────┘  └─────────────────────────┘
@@ -146,7 +143,7 @@
 - **LIFO 背压调度**：推理队列最多保留 1 帧，新帧覆盖旧帧，防止积压
 - **异步推理**：推理在 ThreadPoolExecutor 中执行，不阻塞 ASGI 事件循环
 - **懒加载模型**：模型首次使用时才加载到内存，并缓存在 ModelManager 中
-- **模型类型分发**：通过 `runtime_type`（pytorch / onnx）分发动态构建合适的检测器
+- **模型类型分发**：通过 `runtime_type`（pt / onnx）分发动态构建合适的检测器
 
 ---
 
@@ -162,7 +159,6 @@
 
 ```bash
 # 后端
-cd skyline
 pip install -r requirements.txt
 
 # 前端
@@ -200,7 +196,7 @@ npm run dev
 | 环境变量 | 说明 | 必填 |
 |----------|------|------|
 | `AGENT_API_KEY` | SiliconFlow API 密钥（用于 AI 任务助手与报告生成） | Agent 功能必填 |
-| 模型权重文件 | 需将模型权重文件放置在 `backend/weights/` 目录，对应路径见 `RUNTIME_CONFIG` | 对应模型推理必填 |
+| 模型权重文件 | 需将模型权重文件放置在 `weights/` 目录，对应路径见 `RUNTIME_CONFIG` | 对应模型推理必填 |
 
 ---
 
@@ -229,7 +225,7 @@ npm run dev
 ### 6.3 检测口径
 
 - "检测次数" = 逐帧推理事件累计（同一目标在连续帧中被重复检测时分别计入）
-- "推理耗时" 中 `session_ms / preprocess_ms / postprocess_ms` 可能显示为 `--`（后端未返回时）
+- "推理耗时" 中 `session_ms / preprocess_ms / postprocess_ms` 可能显示为 `null`（PT 路径不可用时）
 
 ### 6.4 目录结构
 
@@ -242,18 +238,19 @@ skyline/
 │   │   ├── api/             # API 客户端
 │   │   ├── components/      # 可复用组件
 │   │   ├── types/           # TypeScript 类型定义
-│   │   └── router/          # 路由配置
+│   │   ├── router/          # 路由配置
+│   │   └── layouts/         # 布局组件（MainLayout）
 │   └── ...
 ├── backend/                  # FastAPI 后端应用
 │   ├── main.py              # 应用入口
-│   ├── core/                # 核心逻辑（推理调度、数据库）
+│   ├── core/                # 核心逻辑（推理调度、数据模型、数据库）
 │   ├── models/              # 模型管理（注册表、检测器、ORM）
 │   ├── routers/             # API 路由（WebSocket、REST）
 │   ├── services/            # Agent 服务（LLM 调用）
 │   └── weights/             # 模型权重文件（需自行放置）
 ├── docs/                     # 项目文档
-│   ├── frontend.md          # 前端实现说明
+│   ├── README.md           # 项目主说明
 │   ├── backend.md          # 后端实现说明
-│   └── README.md            # 项目主说明
+│   └── frontend.md         # 前端实现说明
 └── requirements.txt          # Python 依赖
 ```

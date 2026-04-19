@@ -27,10 +27,10 @@ frontend/src/
 ├── router/index.ts            # 路由表
 ├── store/systemStatus.ts      # WS 状态 / GPU 状态共享
 ├── config/index.ts           # 常量配置（FPS、JPEG质量、阈值）
-├── types/skyline.ts         # 共享类型（WebSocket协议、模型能力）
+├── types/skyline.ts         # 共享类型（WebSocket协议、模型能力、CLASS_COLORS）
 ├── api/
 │   ├── agent.ts             # Agent 接口：parse-task / generate-report
-│   ├── history.ts           # 历史记录接口：列表/详情/保存/补写
+│   ├── history.ts           # 历史记录接口：列表/详情/保存/补写/下载
 │   └── models.ts            # 模型列表与能力接口
 ├── composables/
 │   ├── useWebSocket.ts      # WebSocket 连接、重连、心跳、waitForConnected
@@ -41,6 +41,8 @@ frontend/src/
 │   └── useDelayedDisplay.ts
 ├── components/detection/
 │   └── TaskAssistantPanel.vue  # 任务助手：自然语言任务解析推荐
+├── layouts/
+│   └── MainLayout.vue         # 侧边栏 + 顶栏布局
 ├── views/
 │   ├── Dashboard.vue        # 首页（demo视频展示）
 │   ├── Detection.vue         # 智能检测舱（主功能）
@@ -93,7 +95,7 @@ standby → ready → loading_model → analyzing ↔ paused → finished
 - 支持 prompt_editable=true，可自由编辑类别
 
 **固定类别模型（closed_set）**：
-- 模型示例：YOLOv8-Base、YOLOv8-Car、YOLOv8-VisDrone、YOLOv8-Person、YOLOv8-Thermal-Person
+- 模型示例：YOLOv8-VisDrone（SKY-Monitor）、YOLOv8-Person（SKY-Person）
 - 用户选择：从 supported_classes 中筛选要显示的类别（全选/清空/单选）
 - 不支持自定义 prompt
 
@@ -156,7 +158,7 @@ standby → ready → loading_model → analyzing ↔ paused → finished
 - 降级 ACK：pending 超时后若收到 frame_id 更大的结果，强制清理 pending
 
 **自适应 FPS 限流**：
-- 端到端延迟 > 250ms → 节流模式（20fps → 5fps）
+- 端到端延迟 > 250ms → 节流模式（20fps → 10fps → 5fps）
 - 连续 3 帧延迟 < 180ms → 恢复正常
 
 ### 3.5 任务助手（TaskAssistantPanel）
@@ -177,7 +179,7 @@ standby → ready → loading_model → analyzing ↔ paused → finished
 
 **交互流程**：
 1. 用户输入自然语言描述（如"帮我检测视频中的汽车和行人"）
-2. 点击"理解任务"，加载状态展示 3 个阶段提示
+2. 点击"理解任务"，加载状态展示
 3. 展示推荐结果（模型 / 确信度 / 类别 / 原因）
 4. 点击"应用到当前配置"，写入模型和类别选择
 5. **不会自动启动检测**，需用户手动点击"启动实时分析"
@@ -223,7 +225,9 @@ standby → ready → loading_model → analyzing ↔ paused → finished
   "maxFrameDetections": 45,
   "durationSec": 62.5,
   "summaryText": "检测到 2 类目标，car 最多（800 次）",
-  "taskIntent": "交通/车辆场景分析",
+  "taskPrompt": "...",
+  "taskIntent": "...",
+  "concernFocus": [],
   "sceneEvidence": { ... }
 }
 ```
@@ -242,12 +246,18 @@ standby → ready → loading_model → analyzing ↔ paused → finished
 - 手动停止（stopAnalysis）
 - 暂停对话框保存（saveAndFinish）
 
-**保存数据**：
+**保存数据**（POST /api/history）：
 ```json
 {
   "video_name": "xxx.mp4",
   "duration": 62.5,
-  "detection_model": { model_id, display_name, model_type, prompt_classes, selected_classes },
+  "detection_model": {
+    "model_id": "YOLO-World-V2",
+    "display_name": "YOLO-World V2",
+    "model_type": "open_vocab",
+    "prompt_classes": ["car", "person"],
+    "selected_classes": []
+  },
   "class_counts": { "car": 800, "person": 434 },
   "total_detections": 1234,
   "extra_data": {
@@ -267,7 +277,7 @@ standby → ready → loading_model → analyzing ↔ paused → finished
 **功能**：历史记录列表展示
 
 **API**：
-- `GET /api/history?limit=100` → 列表
+- `GET /api/history?limit=20` → 分页列表
 - `DELETE /api/history/:id` → 删除
 - `GET /api/history/:id/video` → 视频下载
 - `GET /api/history/:id/data` → JSON 下载
@@ -286,7 +296,7 @@ standby → ready → loading_model → analyzing ↔ paused → finished
 - AI 智能总结（extra_data.short_report）
 - 类别统计条形图
 - 模型配置详情（model_type / prompt_classes / selected_classes）
-- 原始归档数据 JSON
+- 原始归档数据 JSON（GET /api/history/:id/data）
 
 ---
 
@@ -327,15 +337,15 @@ standby → ready → loading_model → analyzing ↔ paused → finished
 | send | 发送帧（失败返回 false，递增 sendFailCount） |
 | forceReconnect | 强制重连（visibility 恢复时调用） |
 | waitForConnected | 等待连接建立（Promise，Detection.vue 恢复逻辑依赖） |
-| 心跳 | 15s ping / 20s 超时 |
+| 心跳 | 15s ping（`__heartbeat_ping__`）/ 20s 超时（`__heartbeat_pong__`） |
 | 重连 | 指数退避（1s→2s→...→30s 上限） |
 
 ### 6.2 useVideoStream
 
 | 功能 | 说明 |
 |------|------|
-| loadFile | 加载本地文件（不自动播放） |
-| selectWebcam | 连接摄像头（立即 startPush） |
+| loadFile | 加载本地文件（不自动播放）→ READY 状态 |
+| selectWebcam | 连接摄像头（立即 startPush）→ ANALYZING 状态 |
 | startPush/stopPush | 开始/停止推流 |
 | resetVideo | 重置到 standby 态 |
 | ackFrame | 背压释放（等待 inference_result 后调用） |
@@ -418,7 +428,7 @@ standby → ready → loading_model → analyzing ↔ paused → finished
 ### 8.4 口径说明
 
 - "检测次数" = 逐帧检测事件累计（重复检测同一目标多次计入）
-- "推理耗时" 显示 "--" 的情况：
-  - session_ms / preprocess_ms / postprocess_ms 为 null 时
+- "推理耗时" 显示 `null` 的情况：
+  - `session_ms / preprocess_ms / postprocess_ms` 为 null 时（PT 路径）
   - 后端未返回对应字段时
 - endToEndLatencyMs = 收到结果时间 - 发送帧时间（不含前端渲染）
