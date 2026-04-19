@@ -37,7 +37,7 @@ const sceneVideos = [
 ]
 
 // ── Main banner video ─────────────────────────────────────────────────────────
-const mainVideoSrc = '/demo/homepage-showcase/yolo-world-highlights.mp4'
+const mainVideoSrc = '/demo/homepage-showcase/5.mp4'
 
 // ── Capability cards ──────────────────────────────────────────────────────────
 const capabilities = [

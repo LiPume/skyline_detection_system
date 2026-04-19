@@ -114,7 +114,8 @@ function formatTime(iso: string) {
 }
 
 function shortModel(name: string) {
-  return name.replace('YOLO-World-V2', 'WV2').replace('YOLOv8-Base', 'v8n')
+  const noChinese = name.replace(/[\u4e00-\u9fa5]+/g, '').replace(/[（(].*?[)）]/g, '').trim()
+  return noChinese.replace('YOLO-World-V2', 'WV2').replace('YOLOv8-Base', 'v8n')
 }
 
 function shortModelConfig(modelConfig: { display_name?: string; model_id?: string } | null) {
