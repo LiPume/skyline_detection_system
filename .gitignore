@@ -87,3 +87,16 @@ tmp/
 # Claude / Agent artifacts
 .claude/
 .claudesignore/
+
+# Published runtime assets -----------------------------------------------------
+# The files below are deliberately versioned so that a fresh clone contains the
+# dashboard/performance demos and the source images required by the frontend.
+# Large videos are stored with Git LFS; install Git LFS before cloning.
+!frontend/public/demo/
+!frontend/public/demo/**
+!frontend/public/metrics/
+!frontend/public/metrics/**
+!frontend/public/yolo_final_results.csv
+!frontend/src/assets/*.png
+!frontend/src/assets/logo/*.png
+!demo1/*.mp4

@@ -1,356 +1,226 @@
-# Skyline — 天际线智能视觉检测系统
+# Skyline（天际线）智能视觉检测系统
 
-> 基于无人机实时航拍的多场景目标智能检测与识别系统
+> 面向无人机航拍场景的多模型实时目标检测、智能任务解析与检测结果归档平台。
 
-[![Python](https://img.shields.io/badge/Python-3.10+-blue?logo=python)](https://www.python.org/)
-[![Vue.js](https://img.shields.io/badge/Vue-3.5-42b883?logo=vue.js)](https://vuejs.org/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.115-green?logo=fastapi)](https://fastapi.tiangolo.com/)
-[![YOLO-World](https://img.shields.io/badge/YOLO--World-v8s--worldv2-red?logo=yolo)](https://docs.ultralytics.com/models/yolo-world/)
+本仓库是**第十七届中国大学生服务外包创新创业大赛东部区域赛企业命题类 A27 赛题**的项目封板归档。它保留了可运行的前后端源码、页面演示资源、评测素材、启动脚本与架构文档，方便答辩展示、成果留存和后续复现。
 
----
+[![Python](https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Vue](https://img.shields.io/badge/Vue-3.5-42b883?logo=vuedotjs&logoColor=white)](https://vuejs.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![Git LFS](https://img.shields.io/badge/Demo%20assets-Git%20LFS-ff6b6b)](https://git-lfs.com/)
 
-## 项目简介
+## 项目做什么
 
-Skyline（天际线）是面向比赛展示与答辩的多场景目标检测系统，基于无人机航拍视频流，实现实时目标检测与智能分析。
+Skyline 将浏览器端视频流、后端 GPU 推理和检测任务管理整合为一个可交互的 Web 系统。用户可以从本地视频或摄像头输入画面，选择适合的目标检测模型，在浏览器中实时查看检测框、类别和耗时；完成后可归档检测结果，生成简短的中文分析报告。
 
-**核心定位**：
-- 面向比赛展示与答辩的材料交付
-- 基于无人机航拍视频的多场景目标检测系统
-- 兼顾实时性、稳定性、系统完整度与可解释性
-- 为参赛作品提供可演示、可继续打磨的完整系统
+系统面向航拍巡查、道路交通、园区人员监测、低照度场景等演示需求，重点解决实时展示中“推理排队导致画面越来越落后”的问题：后端只保留最新帧进行推理，宁可丢弃旧帧也不累积延迟。
 
----
+## 功能一览
 
-## 当前系统能力
+| 模块 | 已实现能力 |
+| --- | --- |
+| 多场景首页 | 城市道路、低照度、高空小目标、复杂背景等预置视频展示。 |
+| 智能检测舱 | 本地视频/摄像头取流、模型和类别配置、实时 Canvas 检测框叠加、耗时反馈。 |
+| 实时传输 | 浏览器 WebSocket 推送 JPEG 帧；后端 LIFO 单帧覆盖缓冲与自动重连机制。 |
+| 多模型推理 | YOLO-World V2 开放词汇检测，以及 VisDrone、Person 两个闭集 ONNX 模型。 |
+| 任务助手 | 自然语言任务解析，给出模型与类别推荐；用户确认后才应用配置。 |
+| 结果归档 | SQLite 保存检测记录、检测统计、结果视频/JSON 下载及详情查看。 |
+| AI 短报告 | 任务完成后可按需调用 LLM 生成中文短报告，不配置密钥时不影响核心检测。 |
+| 性能评测 | 标准评测、鲁棒性场景、PR 曲线和典型案例展示；数据与页面随仓库保留。 |
 
-系统已实现以下完整功能链路：
+## 系统架构
 
-- **首页多场景展示**：Dashboard 页面呈现多场景 demo 视频，覆盖白天城区道路 / 夜间低照度 / 高空密集小目标 / 复杂背景等典型无人机航拍场景
-- **Detection 实时检测**：视频加载 → 模型配置 → 实时推理 → Canvas 可视化完整链路
-- **WebSocket 视频流推理**：全双工 WebSocket 通信，LIFO 单帧覆盖缓冲，消除累积延迟
-- **模型切换与视频切换**：支持三种模型：
-  - **YOLO-World-V2**（开放词汇，PT）：支持自定义任意英文类别词
-  - **YOLOv8-VisDrone / SKY-Monitor**（通用航拍，ONNX）：VisDrone 航拍 10 类（pedestrian, people, bicycle, car, van, truck, tricycle, awning-tricycle, bus, motor）
-  - **YOLOv8-Person / SKY-Person**（人员专用，ONNX）：人体检测专用模型
-- **任务助手（自然语言任务解析）**：用户输入自然语言任务描述，AI 解析后推荐模型与类别配置，支持"应用到当前配置"
-- **推荐配置应用**：任务助手解析结果可一键写入当前检测配置，不会自动启动检测，由用户手动触发
-- **检测完成态摘要**：检测结束时自动生成本地检测摘要（检测次数 / 类别分布 / 最大帧目标数 / 本地结论文本）
-- **AI 短报告生成**：用户在完成态手动点击"生成 AI 短报告"，后端调用 LLM 生成中文短报告，完成后自动补写入历史记录 extra_data
-- **历史记录归档与详情页展示**：检测记录自动保存，支持查看 / 下载视频 / 下载 JSON / 在线播放 / 删除操作；HistoryDetail 展示完整检测统计与 AI 总结
-- **模型评估页**：评测总览 / 标准评测结果 / 场景鲁棒性分析 / 典型案例分析 / 轻量训练摘要
-- **PT / ONNX 双运行时路径**：PyTorch（YOLO-World-V2）与 ONNX（YOLOv8-VisDrone、YOLOv8-Person）两条路径统一向前端暴露 timing 字段；TensorRT 为后续扩展方向
-
----
-
-## 系统架构概览
-
-```
-┌────────────────────────────────────────────────────────────┐
-│  用户终端（浏览器）                                         │
-│  ┌─────────────────┐     ┌──────────────────────────────┐ │
-│  │  Vue 3 前端      │     │  Canvas 渲染 / BBox 可视化    │ │
-│  │  状态机控制      │◄────│  WebSocket 实时推理结果       │ │
-│  └─────────────────┘     └───────────────────────────────┘ │
-└─────────────────────────────┬──────────────────────────────┘
-                              │  ws://host:8000/api/ws/video_stream
-┌────────────────────────────┴────────────────────────────┐
-│  FastAPI 后端                                             │
-│  InferenceScheduler（LIFO 单帧缓冲调度）                  │
-│  _blocking_inference（统一推理入口）                      │
-│  ModelManager + PTDetector / ONNXDetector                │
-└──────────────────────────────────────────────────────────┘
-          │
-          │ PTDetector / ONNXDetector
-          ▼
-    GPU 推理节点
-  YOLO-World / YOLOv8
-
-───────────────────────────────────────────────────────────
-  Agent 服务：任务解析（/api/agent/parse-task）
-             AI 短报告生成（/api/agent/generate-report）
-  历史记录：SQLite + /api/history/*
+```text
+浏览器（Vue 3）
+  视频帧捕获 ── WebSocket ──> FastAPI
+  Canvas 结果绘制 <──────────  推理调度器（仅保留最新帧）
+                                  │
+                         ModelManager / GPU 推理
+                        ┌─────────┴─────────┐
+                    PyTorch YOLO-World   ONNX Runtime
+                                  │
+             SQLite 历史记录 <───┴───> 任务助手 / AI 短报告（可选）
 ```
 
-**简要说明**：
-- 前端负责视频帧捕获、WebSocket 推流、Canvas 可视化与状态机控制
-- 后端负责 LIFO 调度、WebSocket 路由、模型懒加载与推理执行
-- 模型管理层（ModelManager）通过双注册表（MODEL_REGISTRY + RUNTIME_CONFIG）解耦前端能力展示与后端运行时选择
-- Agent 服务（独立 LLM 调用）提供任务解析与短报告生成，通过 `services/agent_service.py` 接入 SiliconFlow API
-- 历史记录通过 SQLite 数据库持久化，extra_data JSON 字段承载 detection_summary 与 short_report
+详细设计见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)、[docs/backend.md](docs/backend.md) 和 [docs/frontend.md](docs/frontend.md)。云端平台文档是后续设计方案，并不表示全部已落地。
 
----
+## 仓库内容与大文件策略
 
-## 页面说明
+这不是“只含代码的空壳”仓库。前端实际使用的页面视频、性能评测图表、源图片，以及 `demo1/` 中的 4 个检测输入样例均已纳入版本管理。
 
-| 路由 | 页面 | 说明 |
-|------|------|------|
-| `/` | Dashboard | 首页，多场景 demo 视频展示与功能入口 |
-| `/detection` | Detection | 智能检测舱：视频加载 → 模型配置 → 实时分析 → Canvas 可视化 |
-| `/history` | History | 历史记录库：查看、保存、下载历史检测任务 |
-| `/history/:id` | HistoryDetail | 单次任务详情：完整检测统计 + AI 智能总结 |
-| `/performance` | Performance | 模型评测总览：标准评测结果 + 场景鲁棒性分析 + 典型案例分析 + 轻量训练摘要 |
+| 内容 | 位置 | 状态 |
+| --- | --- | --- |
+| 首页与评测视频 | `frontend/public/demo/` | 随仓库发布，使用 Git LFS 管理。 |
+| 可上传的检测样例 | `demo1/` | 随仓库发布，使用 Git LFS 管理。 |
+| 评测 CSV、PR 曲线、Excel 摘要 | `frontend/public/metrics/` | 随仓库发布。 |
+| 前端 Logo 与页面图片 | `frontend/src/assets/` | 随仓库发布。 |
+| 运行时数据库与历史输出 | `data/` | 本地运行态，不随仓库发布。 |
+| 模型权重 | `weights/` | 不随仓库发布；文件大、部分为训练产物。见 [weights/README.md](weights/README.md)。 |
+| 重复素材与构建产物 | `demo/`、`frontend/public/demo.zip`、`frontend/dist/` | 不发布。它们是已发布资源的重复副本或可重新构建产物。 |
 
----
-
-## 技术栈
-
-| 层级 | 技术 | 说明 |
-|------|------|------|
-| 前端框架 | Vue 3 + TypeScript（严格模式） | Composition API，热更新 |
-| 构建工具 | Vite + Tailwind CSS v4 | 原子化 CSS，深蓝企业 SaaS 配色 |
-| 路由管理 | Vue Router | SPA 多页面路由 |
-| 视频渲染 | Canvas 2D + requestAnimationFrame | 60fps BBox 覆盖绘制 |
-| 网络通信 | 原生 WebSocket API | 全双工，指数退避自动重连 |
-| 后端框架 | FastAPI + Starlette | 异步 WebSocket 路由 |
-| 数据校验 | Pydantic v2 | 严格 schema，非法数据熔断 |
-| 推理引擎 | Ultralytics YOLO-World + YOLOv8 | 开放词汇 + 闭集目标检测 |
-| 深度学习 | PyTorch 2.0+（CUDA 12.1） + ONNXRuntime | PT / ONNX 双 runtime |
-| 数据库 | SQLite（SQLAlchemy 2.0 async + aiosqlite） | 历史记录持久化 |
-| AI 能力 | SiliconFlow API（DeepSeek-V3.2） | 任务解析 + 短报告生成 |
-
----
-
-## 目录结构
-
-```
-skyline/
-├── docs/
-│   ├── ARCHITECTURE.md             # 系统架构文档
-│   ├── backend.md                  # 后端架构文档
-│   ├── frontend.md                 # 前端页面样式与行为文档
-│   ├── cloud_platform_design.md   # 云端平台设计方案（后续扩展）
-│   ├── communicate.md              # 项目现状分析文档
-│   ├── log.md                     # 开发修改日志
-│   └── README.md                  # 项目主说明文档
-
-├── backend/                        # FastAPI 后端（Python 3.10+）
-│   ├── main.py                    # 应用入口，CORS，路由注册，init_db
-│   ├── core/
-│   │   ├── models.py              # Pydantic v2 数据模型（VideoFrame / InferenceResult / StatusMessage / ErrorMessage）
-│   │   ├── inference.py           # InferenceScheduler（LIFO）+ _blocking_inference
-│   │   └── database.py            # SQLAlchemy 异步配置（aiosqlite + SQLite）
-│   ├── models/
-│   │   ├── registry.py           # 双注册表：MODEL_REGISTRY（前端元数据）+ RUNTIME_CONFIG（后端执行配置）
-│   │   ├── model_manager.py       # ModelManager（工厂+缓存）+ BaseDetector + PTDetector + ONNXDetector
-│   │   └── history.py             # DetectionRecord ORM 模型
-│   ├── routers/
-│   │   ├── video_stream.py        # WebSocket 路由 /api/ws/video_stream
-│   │   ├── history.py             # 历史记录 REST API
-│   │   ├── agent.py               # Agent 任务解析 + AI 报告生成 API
-│   │   └── models.py              # 模型能力查询 API
-│   └── services/
-│       └── agent_service.py        # Agent LLM 调用（SiliconFlow）
-
-├── frontend/                      # Vue 3 + TS + Tailwind 前端
-│   ├── vite.config.ts             # Vite 配置（0.0.0.0 外部访问）
-│   └── src/
-│       ├── main.ts                # 入口
-│       ├── App.vue                # 根组件
-│       ├── router/index.ts        # 路由表
-│       ├── store/systemStatus.ts  # 共享 WS / GPU 状态
-│       ├── config/index.ts        # 全局配置常量（FPS、JPEG 质量、阈值）
-│       ├── types/skyline.ts       # 共享类型定义 + CLASS_COLORS
-│       ├── api/
-│       │   ├── agent.ts           # Agent 接口：parse-task / generate-report
-│       │   ├── history.ts         # 历史记录接口：列表/详情/保存/补写
-│       │   └── models.ts          # 模型列表与能力接口
-│       ├── composables/
-│       │   ├── useWebSocket.ts    # WebSocket 连接、重连、心跳、waitForConnected
-│       │   ├── useVideoStream.ts  # 视频帧捕获、背压推送
-│       │   ├── useCanvasRenderer.ts # Canvas BBox 渲染
-│       │   ├── useModelConfig.ts  # 模型选择与配置状态
-│       │   ├── useBufferedLocalPlayback.ts
-│       │   └── useDelayedDisplay.ts
-│       ├── components/detection/
-│       │   └── TaskAssistantPanel.vue # 任务助手：自然语言任务解析推荐
-│       ├── layouts/
-│       │   └── MainLayout.vue     # 侧边栏 + 顶栏布局
-│       ├── views/
-│       │   ├── Dashboard.vue      # 首页（多场景 demo 展示）
-│       │   ├── Detection.vue      # 智能检测舱（主功能）
-│       │   ├── History.vue        # 历史记录列表
-│       │   ├── HistoryDetail.vue  # 历史数据详情页
-│       │   └── Performance.vue    # 模型评测页
-│       └── data/
-│           ├── performanceReport.mock.ts   # 评测报告 mock 数据
-│           └── performanceCsvAdapter.ts     # CSV 适配器（训练历史）
-
-├── weights/                       # 模型权重（需单独下载）
-│   ├── yolov8m-worldv2.pt        # YOLO-World V2（开放词汇，PT）
-│   ├── VisDrone/
-│   │   └── yolov8x_visdrone_best.onnx  # SKY-Monitor（通用航拍，ONNX）
-│   └── person_only/
-│       └── best_person.onnx      # SKY-Person（人员专用，ONNX）
-
-├── data/                          # SQLite 数据库存储目录
-├── start_backend.sh              # 一键启动后端
-├── start_frontend.sh             # 一键启动前端
-├── requirements.txt              # Python 依赖
-├── STARTUP.md                    # 详细启动说明书
-└── README.md                    # 本文件
-```
-
----
-
-## 快速开始
-
-### 环境要求
-
-- Python 3.10+
-- Node.js 18+
-- NVIDIA GPU + CUDA 12.1（如需 GPU 推理）
-- Ubuntu / macOS / Windows（WSL2 兼容）
-
-### 1. 克隆仓库
+首次克隆必须安装 Git LFS 并拉取资源，否则视频文件会是 LFS 指针：
 
 ```bash
 git clone https://github.com/LiPume/skyline_detection_system.git
 cd skyline_detection_system
+git lfs pull
 ```
 
-### 2. 安装后端依赖
+若只需要源码而不需要视频，可使用 `GIT_LFS_SKIP_SMUDGE=1 git clone ...`；之后按需执行 `git lfs pull`。
+
+## 快速启动
+
+### 1. 环境要求
+
+- Python 3.10 或更高版本
+- Node.js 18 或更高版本
+- Git LFS（获取仓库内演示视频所必需）
+- NVIDIA GPU 与 CUDA 环境（建议；模型注册默认使用 `cuda:0`）
+- Linux、macOS、Windows/WSL2 均可用于开发；GPU 推理环境应与 PyTorch、ONNX Runtime 匹配
+
+### 2. 配置后端
 
 ```bash
 pip install -r requirements.txt
+cp backend/.env.example backend/.env
 ```
 
-### 3. 下载模型权重
+`AGENT_API_KEY` 仅用于“任务助手”和“AI 短报告”。不填该项时，视频检测、模型查询和历史记录仍然可以使用；需要 LLM 功能时再填写自己的服务密钥。不要提交 `backend/.env`。
 
-YOLO 模型权重需单独下载，放置到 `weights/` 目录：
+### 3. 准备权重
 
-```bash
-# YOLO-World V2（开放词汇，推荐）
-# ultralytics 会在首次运行时自动下载，也可手动从 https://www.ultralytics.com 下载
-# YOLOv8-VisDrone ONNX 和 YOLOv8-Person ONNX 需自行训练或获取
+将权重按下列路径放入 `weights/`：
+
+```text
+weights/
+├── yolov8m-worldv2.pt
+├── VisDrone/yolov8x_visdrone_best.onnx
+└── person_only/best_person.onnx
 ```
 
-### 4. 启动后端
+权重来源和恢复说明见 [weights/README.md](weights/README.md)。其中 YOLO-World 可遵循 Ultralytics 的官方获取方式；两个项目训练模型需要从原项目归档取得。后端的模型路径定义在 `backend/models/registry.py`。
+
+### 4. 启动服务
+
+开两个终端，在仓库根目录分别执行：
 
 ```bash
 bash start_backend.sh
-# 或手动：
-cd backend && uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
-
-验证：
-```bash
-curl http://localhost:8000/health
-# {"status":"ok","service":"skyline-backend","version":"1.0.0"}
-```
-
-### 5. 启动前端
 
 ```bash
 bash start_frontend.sh
-# 或手动：
-cd frontend && npm install && npm run dev
 ```
 
-### 6. 访问系统
+第一次启动前端会自动使用已有依赖；若 `frontend/node_modules` 不存在，请先执行：
 
-在浏览器打开：`http://<服务器IP>:5173`
+```bash
+cd frontend
+npm install
+npm run dev
+```
 
----
+默认地址：
 
-## WebSocket 通信协议
+| 服务 | 地址 |
+| --- | --- |
+| 前端 | `http://localhost:5173` |
+| 后端健康检查 | `http://localhost:8000/health` |
+| 接口文档 | `http://localhost:8000/docs` |
 
-### 上行帧（Client → Server）
+后端健康检查期望返回：
 
 ```json
-{
-  "message_type": "video_frame",
-  "timestamp": 1710345678.123,
-  "frame_id": 1024,
-  "image_base64": "data:image/jpeg;base64,/9j/...",
-  "model_id": "YOLO-World-V2",
-  "prompt_classes": ["car", "person"],
-  "selected_classes": [],
-  "selected_model": "YOLO-World-V2",
-  "target_classes": ["car", "person"]
-}
+{"status":"ok","service":"skyline-backend","version":"1.0.0"}
 ```
 
-### 下行结果（Server → Client）
+> 局域网演示时，前端会依据浏览器当前主机名拼接后端地址。请确保 5173 和 8000 端口可访问；也可用 `VITE_BACKEND_PORT`、`VITE_WS_URL` 覆盖前端配置。
 
-```json
-{
-  "message_type": "inference_result",
-  "frame_id": 1024,
-  "timestamp": 1710345678.123,
-  "inference_time_ms": 45.2,
-  "session_ms": 38.7,
-  "preprocess_ms": 3.2,
-  "postprocess_ms": 5.1,
-  "model_id": "YOLO-World-V2",
-  "detections": [
-    { "class_name": "car",    "confidence": 0.95, "bbox": [120, 45, 80, 60]  },
-    { "class_name": "person", "confidence": 0.88, "bbox": [200, 150, 40, 100] }
-  ]
-}
+## 演示流程
+
+1. 打开首页，确认预置展示视频可以播放。
+2. 进入“智能检测舱”，上传 [demo1/README.md](demo1/README.md) 中任一视频，或开启摄像头。
+3. 选择模型：开放类别任务使用 `YOLO-World-V2`；道路航拍多类任务使用 `YOLOv8-VisDrone`；人员任务使用 `YOLOv8-Person`。
+4. 对 YOLO-World 输入英文类别词，例如 `person, car, bus`；闭集模型使用界面中的可选类别。
+5. 启动检测，观察画面、边界框与推理耗时；完成后保存历史记录，可下载 JSON/视频并在详情页查看统计。
+6. 如已配置 `AGENT_API_KEY`，可先用任务助手生成推荐配置，或在完成态生成 AI 短报告。
+
+## 模型与适用范围
+
+| 模型 ID | 展示名 | 类型 | 类别/适用场景 |
+| --- | --- | --- | --- |
+| `YOLO-World-V2` | YOLO-Worldv2 | 开放词汇，PyTorch | 可输入任意英文类别，适用于临时目标定义。 |
+| `YOLOv8-VisDrone` | SKY-Monitor | 闭集，ONNX | `pedestrian`、`people`、`bicycle`、`car`、`van`、`truck`、`tricycle`、`awning-tricycle`、`bus`、`motor`。 |
+| `YOLOv8-Person` | SKY-Person | 闭集，ONNX | `person`，适用于可见光人员检测。 |
+
+模型能力由 `GET /api/models` 提供，前端和后端分别通过 `MODEL_REGISTRY` 与 `RUNTIME_CONFIG` 维护能力描述和运行时配置，避免将推理实现细节暴露给界面。
+
+## 接口概览
+
+| 接口 | 用途 |
+| --- | --- |
+| `GET /health` | 服务健康检查。 |
+| `GET /api/models` | 模型列表与可用能力。 |
+| `GET /api/models/{model_id}/capabilities` | 指定模型能力。 |
+| `WS /api/ws/video_stream` | 浏览器视频帧上行与推理结果下行。 |
+| `POST /api/history` / `GET /api/history` | 检测历史记录创建与列表。 |
+| `GET /api/history/{id}` / `DELETE /api/history/{id}` | 历史详情与删除。 |
+| `GET /api/history/{id}/video` / `data` | 下载归档视频或 JSON。 |
+| `POST /api/agent/parse-task` | 自然语言任务解析（可选 LLM）。 |
+| `POST /api/agent/generate-report` | 生成检测短报告（可选 LLM）。 |
+
+WebSocket 上行发送 JPEG Base64 帧、模型 ID 与类别配置；下行返回检测框、分类结果以及 `inference_time_ms`、`session_ms`、`preprocess_ms`、`postprocess_ms`。边界框格式为 `[x_min, y_min, width, height]`，单位为视频原始分辨率像素。
+
+## 核心实现
+
+- **LIFO 单帧覆盖缓冲**：推理线程始终取最新画面，旧帧直接丢弃，防止 GPU 较慢时积压出“回看式”监控画面。
+- **事件循环保护**：阻塞式 GPU 推理通过线程池执行，WebSocket I/O 不被模型 forward 阻塞。
+- **多客户端保护**：锁住类别设置与推理调用，避免多终端共享模型时相互覆盖配置。
+- **统一耗时协议**：PyTorch 与 ONNX 路径向前端暴露一致的 timing 字段，便于可视化与横向比较。
+- **按需 AI 调用**：任务推荐不会自动启动推理，报告也由用户手动触发，避免意外外部调用。
+
+## 项目结构
+
+```text
+skyline_detection_system/
+├── backend/                 # FastAPI、推理调度、模型管理、路由与 Agent 服务
+├── frontend/                # Vue 3 + TypeScript + Vite 用户界面
+│   ├── public/demo/         # 已发布的页面演示视频（Git LFS）
+│   └── public/metrics/      # 评测图表、CSV 与 Excel 摘要
+├── demo1/                   # 可上传的检测输入样例（Git LFS）
+├── docs/                    # 架构、前端、后端、需求和开发过程文档
+├── weights/README.md        # 模型权重恢复说明
+├── requirements.txt         # Python 依赖
+├── start_backend.sh         # 后端启动脚本
+├── start_frontend.sh        # 前端启动脚本
+└── STARTUP.md               # 补充启动说明
 ```
 
-**BBox 格式**：`[x_min, y_min, width, height]`，单位：视频自然分辨率绝对像素。
+## 复现与归档边界
 
-**Timing 字段说明**：
-- `inference_time_ms`：后端单帧总处理耗时（_blocking_inference 整体）
-- `session_ms`：纯模型 forward 耗时（ONNX: session.run / PT: Results.speed["inference"]）
-- `preprocess_ms`：预处理耗时
-- `postprocess_ms`：后处理耗时
-- `model_id`：本次推理使用的模型 ID（冷加载状态通知）
+- 本仓库保留演示系统所需的源码、前端运行素材和评测展示素材；不保留 Python/Node 依赖目录、构建产物、SQLite 运行数据和重复压缩包。
+- 数据库中的历史记录、用户上传视频及检测输出是运行时数据，默认位于 `data/`，若需要长期留存应单独导出。
+- 模型权重、数据集与视频素材可能有各自的来源和许可，使用、再分发或公开展示前请确认相应授权和隐私合规性。
+- 性能页部分内容由 mock 数据和已归档评测文件驱动，适合答辩展示；若用于严谨实验，请替换为可追溯的真实实验记录。
+- TensorRT 是预留扩展方向，当前封板代码未实现 `TRTDetector`。
 
----
+## 开发与验证
 
-## 核心设计亮点
+前端可用以下命令构建：
 
-### LIFO 单帧覆盖缓冲（背压防御）
-
-```
-推流帧队列：
-  帧#1 → 帧#2 → 帧#3 → 帧#4 → 帧#5
-                          ↑
-                   AI 推理线程始终只取最新帧
-                   旧帧直接丢弃，永不排队等待
+```bash
+cd frontend
+npm run build
 ```
 
-彻底消除累积延迟，监控大屏永远显示实况。
+项目没有单独的自动化测试套件；封板验证建议至少完成以下检查：后端 `/health` 返回正常、`/api/models` 可列出三个模型、前端构建成功、预置视频可播放，以及在已放置权重的环境中成功完成一次检测任务。
 
-### 事件循环保护
+## 许可证与致谢
 
-所有 GPU 推理通过 `run_in_threadpool` 下放至线程池，网络 I/O 与 GPU 计算在物理调度上完全解耦。
+本项目仅供学术研究、比赛展示与个人学习使用。仓库未单独授予第三方商业使用授权；各模型、数据和依赖仍受其原始许可证约束。
 
-### 多客户端 GPU 线程安全
-
-`_infer_lock`：`threading.Lock()` 序列化 `set_classes()` + `predict()` 原子执行，多终端连接共享 GPU 而不冲突。
-
-### 统一 PT / ONNX timing 协议
-
-前端协议统一，两条 runtime 路径向前端暴露的字段完全一致（inference_time_ms / session_ms / preprocess_ms / postprocess_ms / model_id）。
-
-### 模型冷加载状态通知
-
-首次冷加载模型时，后端通过 WebSocket 发送 `StatusMessage(phase="model_ready")`，前端收到后从"加载中"状态切换为"分析中"。
-
----
-
-## 当前说明
-
-- 当前项目为"可演示、可继续打磨"的完整系统，文档以当前代码现状为准
-- 云端平台设计部分（`docs/cloud_platform_design.md`）为后续扩展方案，不代表已全部实现
-- 性能评测页（Performance.vue）数据来源为独立 mock 数据，后续可替换为真实评测 JSON / PR 数据 / 训练 CSV
-- TensorRT runtime 为预留扩展方向，当前代码中尚未实现 TRTDetector
-
----
-
-## 许可证
-
-本项目仅供学术研究与个人学习使用。
-
----
-
-## 致谢
-
-- [Ultralytics YOLO-World](https://docs.ultralytics.com/models/yolo-world/) — 开源开放词汇目标检测模型
-- [Ultralytics YOLOv8](https://docs.ultralytics.com/models/yolov8/) — 高性能目标检测模型
-- [Vue.js](https://vuejs.org/) — 渐进式 JavaScript 框架
-- [FastAPI](https://fastapi.tiangolo.com/) — 现代 Python Web 框架
-- [ONNXRuntime](https://onnxruntime.ai/) — 高性能跨平台推理引擎
+- [Ultralytics YOLO-World](https://docs.ultralytics.com/models/yolo-world/)
+- [Ultralytics YOLOv8](https://docs.ultralytics.com/models/yolov8/)
+- [Vue.js](https://vuejs.org/)
+- [FastAPI](https://fastapi.tiangolo.com/)
+- [ONNX Runtime](https://onnxruntime.ai/)
